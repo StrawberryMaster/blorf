@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadTrackButton = document.getElementById('download-track-button');
     const historyButton = document.getElementById('toggleHistoryButton'); 
     const historyModal = document.getElementById('historyModal');
-    const historyHeader = historyModal.querySelector('.border-b');
+    const historyHeader = historyModal.querySelector('.border-b') || historyModal.querySelector('.blorf-modal-header');
     const closeHistoryModal = document.getElementById('closeHistoryModal');
     const historyList = document.getElementById('historyList');
     const bestTrackContainer = document.getElementById('best-track-container');
@@ -874,18 +874,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateInfoPanel() {
+        if (!updateInfoPanel.ui) {
+            updateInfoPanel.ui = {
+                simTime: document.getElementById('simulationTime'),
+                lat: document.getElementById('latitude'),
+                lon: document.getElementById('longitude'),
+                intensity: document.getElementById('intensity'),
+                pressure: document.getElementById('pressure'),
+                category: document.getElementById('category'),
+                ace: document.getElementById('ace'),
+                direction: document.getElementById('direction'),
+                speed: document.getElementById('speed'),
+                status: document.getElementById('status')
+            };
+        }
         const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
-        document.getElementById('simulationTime').textContent = `SIM T+${state.cyclone.age} 小时`;
-        document.getElementById('latitude').textContent = `${state.cyclone.lat.toFixed(1)}°N`;
-        document.getElementById('longitude').textContent = `${state.cyclone.lon.toFixed(1)}°E`;
-        document.getElementById('intensity').textContent = `${knotsToKph(state.cyclone.intensity)} kph (${knotsToMph(state.cyclone.intensity)} mph)`;
+        updateInfoPanel.ui.simTime.textContent = `SIM T+${state.cyclone.age} 小时`;
+        updateInfoPanel.ui.lat.textContent = `${state.cyclone.lat.toFixed(1)}°N`;
+        updateInfoPanel.ui.lon.textContent = `${state.cyclone.lon.toFixed(1)}°E`;
+        updateInfoPanel.ui.intensity.textContent = `${knotsToKph(state.cyclone.intensity)} kph (${knotsToMph(state.cyclone.intensity)} mph)`;
         const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
         const centralPressure = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
-        document.getElementById('pressure').textContent = `${centralPressure.toFixed(0)} hPa`;
-        document.getElementById('category').textContent = cat.name;
-        document.getElementById('ace').textContent = state.cyclone.ace.toFixed(2);
-        document.getElementById('direction').textContent = `${directionToCompass(state.cyclone.direction)}`;
-        document.getElementById('speed').textContent = `${state.cyclone.speed.toFixed(0)} kts`;
+        updateInfoPanel.ui.pressure.textContent = `${centralPressure.toFixed(0)} hPa`;
+        updateInfoPanel.ui.category.textContent = cat.name;
+        updateInfoPanel.ui.ace.textContent = state.cyclone.ace.toFixed(2);
+        updateInfoPanel.ui.direction.textContent = `${directionToCompass(state.cyclone.direction)}`;
+        updateInfoPanel.ui.speed.textContent = `${state.cyclone.speed.toFixed(0)} kts`;
         const isLand = state.cyclone.isLand || false;
         const currentSST = getSST(state.cyclone.lat, state.cyclone.lon, state.currentMonth, state.GlobalTemp);
         const basin = basinSelector.value || 'WPAC'; // 默认西太
@@ -924,7 +938,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (state.cyclone.isSubtropical) statusText = `SD ${cycloneNum}`;
             else statusText = `TD ${cycloneNum}`;
         }
-        document.getElementById('status').textContent = statusText;
+        updateInfoPanel.ui.status.textContent = statusText;
 
         if (state.cyclone && state.pressureSystems) {
             const samplingRadiusDeg = state.cyclone.circulationSize * 0.005;
@@ -997,13 +1011,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateMapInfoBox() {
+        if (!updateMapInfoBox.ui) {
+            updateMapInfoBox.ui = {
+                time: document.getElementById('map-info-time'),
+                intensity: document.getElementById('map-info-intensity'),
+                movement: document.getElementById('map-info-movement')
+            };
+        }
         const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
-        document.getElementById('map-info-time').textContent = `T+${state.cyclone.age}h`;
-        document.getElementById('map-info-intensity').textContent = `${cat.shortName} - ${state.cyclone.intensity.toFixed(0)}KT`;
+        updateMapInfoBox.ui.time.textContent = `T+${state.cyclone.age}h`;
+        updateMapInfoBox.ui.intensity.textContent = `${cat.shortName} - ${state.cyclone.intensity.toFixed(0)}KT`;
         const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
         const pVal = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
         
-        document.getElementById('map-info-movement').textContent = `${pVal.toFixed(0)}hPa ${directionToCompass(state.cyclone.direction)} ${state.cyclone.speed.toFixed(0)}KT`;
+        updateMapInfoBox.ui.movement.textContent = `${pVal.toFixed(0)}hPa ${directionToCompass(state.cyclone.direction)} ${state.cyclone.speed.toFixed(0)}KT`;
     }
     
     function updateStateSiteData() {
