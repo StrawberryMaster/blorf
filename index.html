@@ -4,38 +4,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>blorf</title>
-    <meta name="description" content="Advanced Tropical Cyclone Dynamics Engine">
-    <meta name="theme-color" content="#ff4d6a">
+    <meta name="description" content="An enhanced version of STORM.INC, the advanced tropical cyclone dynamics engine">
+    <meta name="theme-color" content="#1356E1">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://unpkg.com/topojson-client@3"></script>
     <script src="https://mrdoob.github.io/stats.js/build/stats.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+    <link rel="icon" href="./favicon/blorf.png" type="image/png">
 
     <style>
         :root {
-            --bg0: #1a1918; 
+            --bg0: #1a1918;
             --bg1: rgba(26, 25, 24, 0.85);
-            --bg2: rgba(36, 35, 34, 0.95); 
+            --bg2: rgba(36, 35, 34, 0.95);
             --bg3: #33312e;
-            --border: rgba(51, 49, 46, 0.8); 
+            --border: rgba(51, 49, 46, 0.8);
             --border-hi: #4a4743;
-            
-            --accent: #ff4d6a; 
-            --accent-dim: #cc3d55; 
+
+            --accent: #ff4d6a;
+            --accent-dim: #cc3d55;
             --accent-bg: rgba(255, 77, 106, 0.15);
-            --amber: #f0a84d; 
+            --amber: #f0a84d;
             --amber-bg: rgba(240, 168, 77, 0.15);
-            --green: #4ade80; 
+            --green: #4ade80;
             --green-bg: rgba(74, 222, 128, 0.15);
-            --text: #e8e6e1; 
-            --text-muted: #a3a099; 
+            --text: #e8e6e1;
+            --text-muted: #a3a099;
             --text-dim: #807d78;
-            
+
             --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             --font-serif: 'Lora', 'Georgia', serif;
             --font-mono: ui-monospace, 'Menlo', 'Monaco', 'Consolas', monospace;
@@ -63,7 +64,7 @@
 
         .logo { font-family: var(--font-serif); font-size: 20px; font-style: italic; font-weight: 500; display: flex; align-items: center; gap: 6px; }
         .logo .stars { color: var(--accent); font-size: 32px; font-style: normal; line-height: 0; position: relative; top: 5px; font-weight: 600; }
-        
+
         .badge { font-family: var(--font-ui); font-size: 12px; font-weight: 500; letter-spacing: 0.03em; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
         .badge .accent-letter { color: var(--text-dim); display: inline-block; width: 12px; opacity: 0.5; }
         .badge.active { color: var(--green); }
@@ -118,15 +119,15 @@
 
         .land { fill: #3a495e; /* Original Slate-600 */ stroke: #475569; /* Original Slate-500 */ stroke-width: 0.8px; vector-effect: non-scaling-stroke; }
         .graticule { fill: none; stroke: #374151; /* Original Slate-700 */ stroke-width: 0.5px; opacity: 0.3; stroke-dasharray: 2 2; }
-        
+
         .forecast-cone { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1px; stroke-dasharray: 4 4; pointer-events: none; }
         .forecast-track { fill: none; stroke-width: 1.5px; stroke-dasharray: 3 3; opacity: 0.8; }
         .storm-track { fill: none; stroke-width: 2.5px; stroke-linecap: round; stroke-linejoin: round; }
-        
+
         .isobar { fill: none; stroke: #64748b; stroke-width: 0.8px; opacity: 0.3; }
         .isobar-low { fill: none; stroke: var(--accent); stroke-width: 1.2px; opacity: 0.7; }
         .isohume { fill: none; stroke: var(--amber); stroke-width: 0.6px; opacity: 0.5; }
-        
+
         /* Tooltip */
         .tooltip { position: absolute; font-family: var(--font-mono); font-size: 11px; background: var(--bg2); color: var(--text); border: 1px solid var(--border-hi); border-left: 3px solid var(--accent); padding: 8px 12px; border-radius: 4px; pointer-events: none; z-index: 99999; opacity: 0; transition: opacity 0.15s; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
 
@@ -148,7 +149,7 @@
 <body>
 
     <div id="loading-screen" class="fixed inset-0 z-[9999] flex flex-col items-center justify-center transition-opacity duration-500" style="background: var(--bg0);">
-        <div class="logo" style="font-size: 48px; margin-bottom: 32px;"><span class="stars">**</span> blorf</div>
+        <div class="logo" style="font-size: 48px; margin-bottom: 32px;"><span class="stars">⸘‽</span> blorf</div>
         <div style="width: 240px; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden;">
             <div id="loading-bar" style="width: 0%; height: 100%; background: var(--accent); transition: width 1s ease-out;"></div>
         </div>
@@ -163,9 +164,9 @@
     <div class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-4 md:p-6">
 
         <header class="flex justify-between items-start pointer-events-none">
-            
+
             <div class="blorf-panel px-5 py-3 flex items-center gap-6">
-                <div class="logo"><span class="stars">**</span> blorf</div>
+                <div class="logo"><span class="stars">⸘‽</span> blorf</div>
                 <div class="w-px h-6 bg-[var(--border)]"></div>
                 <div class="flex items-center gap-4">
                     <span class="badge active" title="Simulation Time"><span class="accent-letter">T</span> <span id="simulationTime">T+0h</span></span>
@@ -177,7 +178,7 @@
             <div class="flex gap-2 relative pointer-events-auto">
                 <button id="helpButton" class="blorf-panel btn btn-icon" title="Operational Manual"><i class="fa-solid fa-book-open"></i></button>
                 <button id="catButton" class="blorf-panel btn btn-icon" title="Broadcast"><i class="fa-solid fa-satellite-dish"></i></button>
-                
+
                 <div class="relative">
                     <button id="musicButton" class="blorf-panel btn btn-icon" title="BGM Menu"><i class="fa-solid fa-music"></i></button>
                     <div id="musicMenu" class="hidden absolute top-12 right-0 blorf-panel w-64 p-4 z-50">
@@ -186,20 +187,20 @@
                         <input type="range" id="bgmVolume" min="0" max="1" step="0.1" value="0.4" class="w-full">
                     </div>
                 </div>
-                
+
                 <button id="sfxButton" class="blorf-panel btn btn-icon" title="Toggle SFX"><i class="fa-solid fa-volume-high"></i></button>
-                
+
                 <div class="relative">
                     <button id="settingsButton" class="blorf-panel btn btn-icon" title="Configuration"><i class="fa-solid fa-sliders"></i></button>
                     <div id="settingsMenu" class="hidden absolute top-12 right-0 blorf-panel w-72 p-4 z-50 custom-scrollbar max-h-[80vh] overflow-y-auto">
                         <div class="section-title text-sm mb-4">Configuration</div>
-                        
+
                         <div class="ctrl-row"><span class="ctrl-label mono">Global Temp</span><span class="ctrl-val" id="globalTempValue">289K</span></div>
                         <input type="range" id="globalTempSlider" min="279" max="305" value="289" step="1" class="w-full mb-4">
-                        
+
                         <div class="ctrl-row"><span class="ctrl-label mono">Vert Shear</span><span class="ctrl-val" id="globalShearValue">100</span></div>
                         <input type="range" id="globalShearSlider" min="0" max="200" value="100" step="1" class="w-full mb-6">
-                        
+
                         <div class="text-[11px] font-mono text-[var(--text-muted)] uppercase mb-2">Observation Post</div>
                         <input type="text" id="siteNameInput" placeholder="CALLSIGN" class="mb-2 uppercase">
                         <div class="coord-grid mb-6">
@@ -229,9 +230,9 @@
         <div id="news-feed-container" class="absolute top-24 right-6 z-50 pointer-events-none flex flex-col items-end gap-2"></div>
 
         <div class="flex-1 flex items-start mt-4 pointer-events-none relative">
-            
+
             <aside id="left-hud-content" class="blorf-panel w-72 md:w-80 flex flex-col overflow-hidden max-h-[calc(100vh-200px)] pointer-events-auto">
-                
+
                 <div id="satellite-window" class="relative w-full aspect-square bg-black border-b border-[var(--border)] group hidden">
                     <span class="absolute top-2 left-2 text-[10px] font-mono text-[var(--accent)] font-bold z-10"><i class="fa-solid fa-circle text-[8px] animate-pulse"></i> SAT_LIVE</span>
                     <button id="close-sat-btn" class="absolute top-2 right-2 z-10 text-[var(--text-muted)] hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"><i class="fa-solid fa-xmark"></i></button>
@@ -318,9 +319,9 @@
 
         <div class="flex justify-center pointer-events-none pb-0 md:pb-2">
             <div class="blorf-panel w-full md:w-auto px-4 py-2.5 flex items-center gap-3 overflow-x-auto custom-scrollbar pointer-events-auto rounded-none md:rounded-xl border-x-0 md:border-x">
-                
+
                 <button id="generateButton" class="btn active font-bold uppercase tracking-wide min-w-[120px] shadow-lg"><i class="fa-solid fa-power-off mr-2"></i> Initialize</button>
-                
+
                 <div class="h-6 w-px bg-[var(--border-hi)] shrink-0"></div>
 
                 <select id="basinSelector" class="w-24 border-0 bg-transparent text-center font-bold cursor-pointer shrink-0">
@@ -357,7 +358,7 @@
     <audio id="bgmAudio" loop preload="auto">
         <source src="Freshly Squeezed - Graham Donald Harry Preskett.m4a" type="audio/mpeg">
     </audio>
-    
+
     <div id="historyModal" class="hidden blorf-modal-wrapper">
         <div class="blorf-modal-box">
             <div class="blorf-modal-header">
@@ -446,9 +447,9 @@
         document.addEventListener("DOMContentLoaded", () => {
             const screen = document.getElementById('loading-screen');
             const bar = document.getElementById('loading-bar');
-            
+
             setTimeout(() => { bar.style.width = "100%"; }, 50);
-            
+
             setTimeout(() => {
                 screen.style.opacity = '0';
                 setTimeout(() => { screen.style.display = 'none'; }, 500);
@@ -480,7 +481,7 @@
 
                 function dragStart(e) {
                     if (['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.target.closest('button')) return;
-                    
+
                     if (e.type === "touchstart") {
                         initialX = e.touches[0].clientX - xOffset;
                         initialY = e.touches[0].clientY - yOffset;
