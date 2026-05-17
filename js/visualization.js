@@ -21,17 +21,23 @@ export function smoothNoise(x, y) {
     const v = y - j;
 
     // smoothstep interpolation formula
-    const smooth = t => t * t * (3 - 2 * t);
-    const uSm = smooth(u);
-    const vSm = smooth(v);
+    const uSm = u * u * (3 - 2 * u);
+    const vSm = v * v * (3 - 2 * v);
 
-    const n00 = pseudoNoise(i, j);
-    const n10 = pseudoNoise(i + 1, j);
-    const n01 = pseudoNoise(i, j + 1);
-    const n11 = pseudoNoise(i + 1, j + 1);
+    const n00 = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+    const p00 = n00 - Math.floor(n00);
 
-    const x1 = n00 + (n10 - n00) * uSm;
-    const x2 = n01 + (n11 - n01) * uSm;
+    const n10 = Math.sin((i + 1) * 12.9898 + j * 78.233) * 43758.5453;
+    const p10 = n10 - Math.floor(n10);
+
+    const n01 = Math.sin(i * 12.9898 + (j + 1) * 78.233) * 43758.5453;
+    const p01 = n01 - Math.floor(n01);
+
+    const n11 = Math.sin((i + 1) * 12.9898 + (j + 1) * 78.233) * 43758.5453;
+    const p11 = n11 - Math.floor(n11);
+
+    const x1 = p00 + (p10 - p00) * uSm;
+    const x2 = p01 + (p11 - p01) * uSm;
 
     return x1 + (x2 - x1) * vSm;
 }
@@ -202,26 +208,28 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
 
     if (!cyclone.radiiState) cyclone.radiiState = {};
 
-    const getPointAt = (centerLon, centerLat, angleRad, distKm) => {
-        const distDeg = distKm / 111.32;
-        const lonScale = 1.0 / Math.max(0.1, Math.cos(centerLat * Math.PI / 180));
-        return [
-            centerLon + distDeg * Math.cos(angleRad) * lonScale,
-            centerLat + distDeg * Math.sin(angleRad)
-        ];
-    };
+    const PI_OVER_180 = Math.PI / 180;
+    const DEG_PER_KM = 1 / 111.32;
+    const centerLon = cyclone.lon;
+    const centerLat = cyclone.lat;
+    const lonScale = 1.0 / Math.max(0.1, Math.cos(centerLat * PI_OVER_180));
 
-    const measureRadiusAtAngle = (angleRad, threshold) => {
-        const [peakLon, peakLat] = getPointAt(cyclone.lon, cyclone.lat, angleRad, RMW_KM);
-        const peakVec = getWindVectorAt(peakLon, peakLat, currentMonth, cyclone, pressureSystems);
+    // Pre-calculate trigonometric lookups
+    const measureRadiusFast = (cosA, sinA, threshold) => {
+        const peakDistDeg = RMW_KM * DEG_PER_KM;
+        const peakLon = centerLon + peakDistDeg * cosA * lonScale;
+        const peakLat = centerLat + peakDistDeg * sinA;
 
-        if (peakVec.magnitude < threshold) return 0;
+        if (getWindVectorAt(peakLon, peakLat, currentMonth, cyclone, pressureSystems).magnitude < threshold) return 0;
 
         let currentDist = RMW_KM;
+        const stepDeg = STEP_KM * DEG_PER_KM;
+
         while (currentDist < MAX_SEARCH_KM) {
-            const [sampleLon, sampleLat] = getPointAt(cyclone.lon, cyclone.lat, angleRad, currentDist);
-            const vec = getWindVectorAt(sampleLon, sampleLat, currentMonth, cyclone, pressureSystems);
-            if (vec.magnitude < threshold) return currentDist;
+            const distDeg = currentDist * DEG_PER_KM;
+            const sampleLon = centerLon + distDeg * cosA * lonScale;
+            const sampleLat = centerLat + distDeg * sinA;
+            if (getWindVectorAt(sampleLon, sampleLat, currentMonth, cyclone, pressureSystems).magnitude < threshold) return currentDist;
             currentDist += STEP_KM;
         }
         return currentDist;
@@ -234,14 +242,9 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
         { id: 3, start: 270, end: 360 }
     ];
 
-    const PI_OVER_180 = Math.PI / 180;
-
     windData.forEach(level => {
         if (!level.active) return;
-
-        if (!cyclone.radiiState[level.threshold]) {
-            cyclone.radiiState[level.threshold] = [0, 0, 0, 0];
-        }
+        if (!cyclone.radiiState[level.threshold]) cyclone.radiiState[level.threshold] = [0, 0, 0, 0];
 
         const polyPoints = [];
         let hasValidPoints = false;
@@ -255,26 +258,31 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
             } else {
                 let maxRadiusInQuad = 0;
                 for (let angle = quad.start; angle <= quad.end; angle += SCAN_ANGLE_STEP) {
-                    let r = measureRadiusAtAngle(angle * PI_OVER_180, level.threshold) * level.visualScale;
+                    const rad = angle * PI_OVER_180;
+                    let r = measureRadiusFast(Math.cos(rad), Math.sin(rad), level.threshold) * level.visualScale;
                     if (r > maxRadiusInQuad) maxRadiusInQuad = r;
                 }
 
-                if (previousRadius === 0 && maxRadiusInQuad > 0) {
-                    smoothedRadius = maxRadiusInQuad;
-                } else {
-                    smoothedRadius = previousRadius + (maxRadiusInQuad - previousRadius) * SMOOTH_FACTOR;
-                }
+                smoothedRadius = (previousRadius === 0 && maxRadiusInQuad > 0)
+                    ? maxRadiusInQuad
+                    : previousRadius + (maxRadiusInQuad - previousRadius) * SMOOTH_FACTOR;
+
                 cyclone.radiiState[level.threshold][idx] = smoothedRadius;
             }
 
             if (smoothedRadius < 5) {
-                polyPoints.push(getPointAt(cyclone.lon, cyclone.lat, 0, 0));
+                polyPoints.push([centerLon, centerLat]);
                 return;
             }
 
             hasValidPoints = true;
+            const distDeg = smoothedRadius * DEG_PER_KM;
             for (let angle = quad.start; angle <= quad.end; angle += DRAW_ARC_STEP) {
-                polyPoints.push(getPointAt(cyclone.lon, cyclone.lat, angle * PI_OVER_180, smoothedRadius));
+                const rad = angle * PI_OVER_180;
+                polyPoints.push([
+                    centerLon + distDeg * Math.cos(rad) * lonScale,
+                    centerLat + distDeg * Math.sin(rad)
+                ]);
             }
         });
 
@@ -372,19 +380,23 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
 
     if (!world || !cyclone || cyclone.status !== 'active') return;
 
-    const batchLow = [];
-    const batchHigh = [];
-    const batchExt = [];
-
     const GEO_RANGE = 20;
     const GEO_STEP = 0.4;
     const arrowScale = 0.75;
     const headLen = 5;
 
+    const maxCapacity = Math.ceil((GEO_RANGE / GEO_STEP) * (GEO_RANGE / GEO_STEP)) * 8;
+    const batchLow = new Float32Array(maxCapacity);
+    const batchHigh = new Float32Array(maxCapacity);
+    const batchExt = new Float32Array(maxCapacity);
+    let idxLow = 0, idxHigh = 0, idxExt = 0;
+
     const startLat = Math.floor(cyclone.lat - GEO_RANGE * 0.5);
     const endLat = Math.ceil(cyclone.lat + GEO_RANGE * 0.5);
     const startLon = Math.floor(cyclone.lon - GEO_RANGE);
     const endLon = Math.ceil(cyclone.lon + GEO_RANGE);
+
+    const ANGLE_BACK = Math.PI * 0.85;
 
     for (let lat = startLat; lat <= endLat; lat += GEO_STEP) {
         if (lat < -90 || lat > 90) continue;
@@ -392,7 +404,7 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
         for (let lon = startLon; lon <= endLon; lon += GEO_STEP) {
             const proj = mapProjection([lon, lat]);
             if (!proj || isNaN(proj[0]) || isNaN(proj[1])) continue;
-            const [x, y] = proj;
+            const x = proj[0], y = proj[1];
 
             if (x < -20 || x > width + 20 || y < -20 || y > height + 20) continue;
 
@@ -401,29 +413,32 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
 
             const angle = Math.atan2(-vec.v, vec.u);
             const len = Math.min(20, vec.magnitude * arrowScale);
-            const halfLen = len / 2;
-            const cosA = Math.cos(angle);
-            const sinA = Math.sin(angle);
+            const halfLen = len * 0.5;
 
-            const dx = halfLen * cosA;
-            const dy = halfLen * sinA;
+            const dx = halfLen * Math.cos(angle);
+            const dy = halfLen * Math.sin(angle);
             const p1x = x - dx, p1y = y - dy;
             const p2x = x + dx, p2y = y + dy;
-
-            const angleBack1 = angle + Math.PI * 0.85;
-            const angleBack2 = angle - Math.PI * 0.85;
 
             let h1x = p2x, h1y = p2y, h2x = p2x, h2y = p2y;
 
             if (len > 6) {
-                h1x = p2x + headLen * Math.cos(angleBack1);
-                h1y = p2y + headLen * Math.sin(angleBack1);
-                h2x = p2x + headLen * Math.cos(angleBack2);
-                h2y = p2y + headLen * Math.sin(angleBack2);
+                h1x = p2x + headLen * Math.cos(angle + ANGLE_BACK);
+                h1y = p2y + headLen * Math.sin(angle + ANGLE_BACK);
+                h2x = p2x + headLen * Math.cos(angle - ANGLE_BACK);
+                h2y = p2y + headLen * Math.sin(angle - ANGLE_BACK);
             }
 
-            let targetBatch = vec.magnitude > 50 ? batchExt : (vec.magnitude > 30 ? batchHigh : batchLow);
-            targetBatch.push(p1x, p1y, p2x, p2y, h1x, h1y, h2x, h2y);
+            if (vec.magnitude > 50) {
+                batchExt[idxExt++] = p1x; batchExt[idxExt++] = p1y; batchExt[idxExt++] = p2x; batchExt[idxExt++] = p2y;
+                batchExt[idxExt++] = h1x; batchExt[idxExt++] = h1y; batchExt[idxExt++] = h2x; batchExt[idxExt++] = h2y;
+            } else if (vec.magnitude > 30) {
+                batchHigh[idxHigh++] = p1x; batchHigh[idxHigh++] = p1y; batchHigh[idxHigh++] = p2x; batchHigh[idxHigh++] = p2y;
+                batchHigh[idxHigh++] = h1x; batchHigh[idxHigh++] = h1y; batchHigh[idxHigh++] = h2x; batchHigh[idxHigh++] = h2y;
+            } else {
+                batchLow[idxLow++] = p1x; batchLow[idxLow++] = p1y; batchLow[idxLow++] = p2x; batchLow[idxLow++] = p2y;
+                batchLow[idxLow++] = h1x; batchLow[idxLow++] = h1y; batchLow[idxLow++] = h2x; batchLow[idxLow++] = h2y;
+            }
         }
     }
 
@@ -431,11 +446,11 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
     windCtx.lineCap = 'round';
     windCtx.lineJoin = 'round';
 
-    const drawBatch = (batch, color) => {
-        if (batch.length === 0) return;
+    const drawBatch = (batch, count, color) => {
+        if (count === 0) return;
         windCtx.beginPath();
         windCtx.strokeStyle = color;
-        for (let i = 0; i < batch.length; i += 8) {
+        for (let i = 0; i < count; i += 8) {
             windCtx.moveTo(batch[i], batch[i+1]);
             windCtx.lineTo(batch[i+2], batch[i+3]);
             windCtx.moveTo(batch[i+4], batch[i+5]);
@@ -443,11 +458,11 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
             windCtx.lineTo(batch[i+6], batch[i+7]);
         }
         windCtx.stroke();
-    }
+    };
 
-    drawBatch(batchLow, "rgba(34, 211, 238, 0.6)");
-    drawBatch(batchHigh, "rgba(252, 165, 165, 0.7)");
-    drawBatch(batchExt, "rgba(250, 120, 215, 0.8)");
+    drawBatch(batchLow, idxLow, "rgba(34, 211, 238, 0.6)");
+    drawBatch(batchHigh, idxHigh, "rgba(252, 165, 165, 0.7)");
+    drawBatch(batchExt, idxExt, "rgba(250, 120, 215, 0.8)");
 }
 
 export function drawForecastCone(container, mapProjection, pathForecasts) {
@@ -1524,7 +1539,9 @@ export function renderProbabilitiesStyle(cyclone, timeIndex, worldData, threshol
     }
     if (realRadiusPx <= 0) realRadiusPx = (historyPoint[2] >= threshold) ? ((0.5 + (historyPoint[2] - threshold) * 0.015) * pxPerDeg * 0.7) : (16 - 0.2 * threshold);
 
-    const gridW = 200, gridH = 150, values = new Float32Array(gridW * gridH).fill(0), track = forecasts[0].track, scaleX = gridW / width, scaleY = gridH / height;
+    const gridW = 200, gridH = 150, values = new Float32Array(gridW * gridH).fill(0), track = forecasts[0].track;
+    const scaleX = width / gridW, scaleY = height / gridH;
+
     for (let k = 0; k < track.length - 1; k++) {
         const pos1 = projection([track[k][0], track[k][1]]), pos2 = projection([track[k+1][0], track[k+1][1]]);
         if (!pos1 || !pos2) continue;
@@ -1542,23 +1559,32 @@ export function renderProbabilitiesStyle(cyclone, timeIndex, worldData, threshol
             const maxProb = (1.0 / (1.0 + Math.exp(-1.5 * ((intensity - threshold) / (5 + hour * 0.25))))) * Math.max(0.0, 1.0 - (hour / (threshold === 64 ? 150 : 200))) * 100;
             if (maxProb < 1) continue;
 
-            const influenceRad = jitteredRadius + sigmaPx * 2.5, gx = px * scaleX, gy = py * scaleY, gRad = influenceRad * scaleX;
-            const minGX = Math.max(0, Math.floor(gx - gRad)), maxGX = Math.min(gridW - 1, Math.ceil(gx + gRad));
-            const minGY = Math.max(0, Math.floor(gy - gRad)), maxGY = Math.min(gridH - 1, Math.ceil(gy + gRad));
+            const influenceRad = jitteredRadius + sigmaPx * 2.5;
+            const minGX = Math.max(0, Math.floor((px - influenceRad) / scaleX)), maxGX = Math.min(gridW - 1, Math.ceil((px + influenceRad) / scaleX));
+            const minGY = Math.max(0, Math.floor((py - influenceRad) / scaleY)), maxGY = Math.min(gridH - 1, Math.ceil((py + influenceRad) / scaleY));
             const sigmaSq2 = 2 * sigmaPx * sigmaPx;
 
             for (let j = minGY; j <= maxGY; j++) {
-                const idx = j * gridW, dy2 = Math.pow((j / gridH) * height - py, 2);
+                const idx = j * gridW;
+                const dy = (j * scaleY) - py;
+                const dy2 = dy * dy;
                 for (let i = minGX; i <= maxGX; i++) {
-                    const prob = Math.exp(-Math.pow(Math.max(0, Math.sqrt(Math.pow((i / gridW) * width - px, 2) + dy2) - jitteredRadius), 2) / sigmaSq2) * maxProb;
-                    if (prob > values[idx + i]) values[idx + i] = prob + (prob > 3 ? (Math.abs(Math.sin((i+k)*12.9898+(j+s)*78.233)*43758.5453)%1 - 0.5)*8.0 : 0);
+                    const dx = (i * scaleX) - px;
+                    const dist = Math.sqrt(dx * dx + dy2);
+                    if (dist > jitteredRadius) {
+                        const diff = dist - jitteredRadius;
+                        const prob = Math.exp(-(diff * diff) / sigmaSq2) * maxProb;
+                        if (prob > values[idx + i]) values[idx + i] = prob + (prob > 3 ? (Math.abs(Math.sin((i+k)*12.9898+(j+s)*78.233)*43758.5453)%1 - 0.5)*8.0 : 0);
+                    } else {
+                        if (maxProb > values[idx + i]) values[idx + i] = maxProb + (maxProb > 3 ? (Math.abs(Math.sin((i+k)*12.9898+(j+s)*78.233)*43758.5453)%1 - 0.5)*8.0 : 0);
+                    }
                 }
             }
         }
     }
 
     const thresholds = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90], colors = ["rgba(255,255,255,0)", "#008000", "#32cd32", "#adff2f", "#ffff00", "#ffd700", "#ffa500", "#ff4500", "#ff0000", "#8b0000", "#800080"];
-    const contourPath = d3.geoPath().projection(d3.geoTransform({ point: function(x, y) { this.stream.point(x * (width / gridW), y * (height / gridH)); } })).context(ctx);
+    const contourPath = d3.geoPath().projection(d3.geoTransform({ point: function(x, y) { this.stream.point(x * scaleX, y * scaleY); } })).context(ctx);
 
     d3.contours().size([gridW, gridH]).thresholds(thresholds)(values).forEach((geometry, i) => {
         ctx.beginPath(); contourPath(geometry); ctx.fillStyle = colors[i + 1] || colors[colors.length - 1]; ctx.fill();
@@ -1872,15 +1898,23 @@ export function startNewsAnimation(canvas, worldData, cyclone, pathForecasts, ba
             ctx.drawImage(streamlineBgCanvas, 0, 0);
 
             ctx.lineWidth = 1.2; ctx.lineCap = "round";
+
             for (let i = 0; i < particles.length; i++) {
                 const geo = projection.invert([particles[i].x, particles[i].y]);
                 if (!geo) { initParticle(particles[i]); continue; }
                 const vec = getWindVectorAt(geo[0], geo[1], cyclone.currentMonth || 8, cyclone, pressureSystems, globalTemp, globalShear);
+
                 particles[i].x += vec.u * 0.2; particles[i].y -= vec.v * 0.2; particles[i].age++;
 
+                const agePhase = particles[i].age < 15 ? particles[i].age / 15 : (particles[i].age > particles[i].maxAge - 15 ? (particles[i].maxAge - particles[i].age) / 15 : 0.5);
+
+                ctx.save();
+                ctx.globalAlpha = vec.magnitude > 48 ? agePhase : (vec.magnitude > 23 ? agePhase : agePhase * 0.4);
+                ctx.strokeStyle = vec.magnitude > 48 ? "#ff5050" : (vec.magnitude > 23 ? "#ffdc64" : "#c8ffff");
+
                 ctx.beginPath(); ctx.moveTo(particles[i].x, particles[i].y); ctx.lineTo(particles[i].x - vec.u * 0.6, particles[i].y + vec.v * 0.6);
-                ctx.strokeStyle = vec.magnitude > 48 ? `rgba(255, 80, 80, ${particles[i].age < 15 ? particles[i].age / 15 : (particles[i].age > particles[i].maxAge - 15 ? (particles[i].maxAge - particles[i].age) / 15 : 0.5)})` : (vec.magnitude > 23 ? `rgba(255, 220, 100, ${particles[i].age < 15 ? particles[i].age / 15 : (particles[i].age > particles[i].maxAge - 15 ? (particles[i].maxAge - particles[i].age) / 15 : 0.5)})` : `rgba(200, 255, 255, ${(particles[i].age < 15 ? particles[i].age / 15 : (particles[i].age > particles[i].maxAge - 15 ? (particles[i].maxAge - particles[i].age) / 15 : 0.5)) * 0.4})`);
-                ctx.stroke();
+                ctx.stroke(); ctx.restore();
+
                 if (particles[i].age >= particles[i].maxAge || particles[i].x < 0 || particles[i].x > width || particles[i].y < 0 || particles[i].y > height) initParticle(particles[i]);
             }
 

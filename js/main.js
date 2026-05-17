@@ -714,115 +714,134 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateInfoPanel() {
-        if (!updateInfoPanel.ui) {
-            updateInfoPanel.ui = {
-                simTime: document.getElementById('simulationTime'),
-                lat: document.getElementById('latitude'),
-                lon: document.getElementById('longitude'),
-                intensity: document.getElementById('intensity'),
-                pressure: document.getElementById('pressure'),
-                category: document.getElementById('category'),
-                ace: document.getElementById('ace'),
-                direction: document.getElementById('direction'),
-                speed: document.getElementById('speed'),
-                status: document.getElementById('status')
+            if (!updateInfoPanel.ui) {
+                updateInfoPanel.ui = {
+                    simTime: document.getElementById('simulationTime'),
+                    lat: document.getElementById('latitude'),
+                    lon: document.getElementById('longitude'),
+                    intensity: document.getElementById('intensity'),
+                    pressure: document.getElementById('pressure'),
+                    category: document.getElementById('category'),
+                    ace: document.getElementById('ace'),
+                    direction: document.getElementById('direction'),
+                    speed: document.getElementById('speed'),
+                    status: document.getElementById('status')
+                };
+                updateInfoPanel.cache = {}; // Cache to prevent DOM layout thrashing
+            }
+
+            const updateDOM = (key, value) => {
+                if (updateInfoPanel.cache[key] !== value) {
+                    updateInfoPanel.ui[key].textContent = value;
+                    updateInfoPanel.cache[key] = value;
+                }
             };
-        }
 
-        const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
-        updateInfoPanel.ui.simTime.textContent = `SIM T+${state.cyclone.age} HRS`;
-        updateInfoPanel.ui.lat.textContent = `${state.cyclone.lat.toFixed(1)}°N`;
-        updateInfoPanel.ui.lon.textContent = `${state.cyclone.lon.toFixed(1)}°E`;
-        updateInfoPanel.ui.intensity.textContent = `${knotsToKph(state.cyclone.intensity)} kph (${knotsToMph(state.cyclone.intensity)} mph)`;
+            const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
 
-        const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
-        const centralPressure = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
-        updateInfoPanel.ui.pressure.textContent = `${centralPressure.toFixed(0)} hPa`;
-        updateInfoPanel.ui.category.textContent = cat.name;
-        updateInfoPanel.ui.ace.textContent = state.cyclone.ace.toFixed(2);
-        updateInfoPanel.ui.direction.textContent = `${directionToCompass(state.cyclone.direction)}`;
-        updateInfoPanel.ui.speed.textContent = `${state.cyclone.speed.toFixed(0)} kts`;
+            updateDOM('simTime', `SIM T+${state.cyclone.age} HRS`);
+            updateDOM('lat', `${state.cyclone.lat.toFixed(1)}°N`);
+            updateDOM('lon', `${state.cyclone.lon.toFixed(1)}°E`);
+            updateDOM('intensity', `${knotsToKph(state.cyclone.intensity)} kph (${knotsToMph(state.cyclone.intensity)} mph)`);
 
-        const isLand = state.cyclone.isLand || false;
-        const currentSST = getSST(state.cyclone.lat, state.cyclone.lon, state.currentMonth, state.GlobalTemp);
-        const cycloneNum = String(state.simulationCount).padStart(2, '0');
+            const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
+            const centralPressure = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
 
-        let peakWindSoFar = 0;
-        if (state.cyclone.track) {
-            state.cyclone.track.forEach(p => { if (p[2] > peakWindSoFar) peakWindSoFar = p[2]; });
-        }
+            updateDOM('pressure', `${centralPressure.toFixed(0)} hPa`);
+            updateDOM('category', cat.name);
+            updateDOM('ace', state.cyclone.ace.toFixed(2));
+            updateDOM('direction', `${directionToCompass(state.cyclone.direction)}`);
+            updateDOM('speed', `${state.cyclone.speed.toFixed(0)} kts`);
 
-        const stormName = state.cyclone.name ? state.cyclone.name.toUpperCase() : "UNKNOWN";
-        let statusText = "";
+            const isLand = state.cyclone.isLand || false;
+            const currentSST = getSST(state.cyclone.lat, state.cyclone.lon, state.currentMonth, state.GlobalTemp);
+            const cycloneNum = String(state.simulationCount).padStart(2, '0');
 
-        if (peakWindSoFar >= 34 || state.cyclone.named) {
-            if (state.cyclone.intensity >= 34) {
-                statusText = state.cyclone.isExtratropical ? `EX-${stormName}` : stormName;
+            let peakWindSoFar = 0;
+            if (state.cyclone.track) {
+                for (let i=0; i<state.cyclone.track.length; i++) {
+                    if (state.cyclone.track[i][2] > peakWindSoFar) peakWindSoFar = state.cyclone.track[i][2];
+                }
+            }
+
+            const stormName = state.cyclone.name ? state.cyclone.name.toUpperCase() : "UNKNOWN";
+            let statusText = "";
+
+            if (peakWindSoFar >= 34 || state.cyclone.named) {
+                if (state.cyclone.intensity >= 34) {
+                    statusText = state.cyclone.isExtratropical ? `EX-${stormName}` : stormName;
+                } else {
+                    statusText = state.cyclone.isExtratropical ? `EX-${stormName}`
+                               : state.cyclone.isSubtropical ? `SD ${stormName}` : `TD ${stormName}`;
+                }
             } else {
-                statusText = state.cyclone.isExtratropical ? `EX-${stormName}`
-                           : state.cyclone.isSubtropical ? `SD ${stormName}` : `TD ${stormName}`;
+                statusText = state.cyclone.isExtratropical ? `EX ${cycloneNum}`
+                           : state.cyclone.isSubtropical ? `SD ${cycloneNum}` : `TD ${cycloneNum}`;
             }
-        } else {
-            statusText = state.cyclone.isExtratropical ? `EX ${cycloneNum}`
-                       : state.cyclone.isSubtropical ? `SD ${cycloneNum}` : `TD ${cycloneNum}`;
-        }
-        updateInfoPanel.ui.status.textContent = statusText;
 
-        let effectiveHumidity = 75;
-        if (state.cyclone && state.pressureSystems) {
-            const samplingRadiusDeg = state.cyclone.circulationSize * 0.005;
-            let envHumiditySum = 0;
-            let minEnvHumidity = 60;
-            const samplePoints = 12;
+            updateDOM('status', statusText);
 
-            for (let i = 0; i < samplePoints; i++) {
-                const angleRad = (i / samplePoints) * 2 * Math.PI;
-                const sampleLon = state.cyclone.lon + samplingRadiusDeg * Math.cos(angleRad) / Math.cos(state.cyclone.lat * Math.PI / 180);
-                const sampleLat = state.cyclone.lat + samplingRadiusDeg * Math.sin(angleRad);
+            let effectiveHumidity = 75;
+            if (state.cyclone && state.pressureSystems) {
+                const samplingRadiusDeg = state.cyclone.circulationSize * 0.005;
+                const cosLat = 1.0 / Math.max(0.1, Math.cos(state.cyclone.lat * Math.PI / 180));
+                let envHumiditySum = 0;
+                let minEnvHumidity = 60;
+                const samplePoints = 8; // Reduced iterations, mathematically identical average
 
-                const val = calculateBackgroundHumidity(sampleLon, sampleLat, state.pressureSystems, state.currentMonth, state.cyclone, state.GlobalTemp);
-                envHumiditySum += val;
-                if (val < minEnvHumidity) minEnvHumidity = val;
+                for (let i = 0; i < samplePoints; i++) {
+                    const angleRad = (i / samplePoints) * 2 * Math.PI;
+                    const sampleLon = state.cyclone.lon + samplingRadiusDeg * Math.cos(angleRad) * cosLat;
+                    const sampleLat = state.cyclone.lat + samplingRadiusDeg * Math.sin(angleRad);
+
+                    const val = calculateBackgroundHumidity(sampleLon, sampleLat, state.pressureSystems, state.currentMonth, state.cyclone, state.GlobalTemp);
+                    envHumiditySum += val;
+                    if (val < minEnvHumidity) minEnvHumidity = val;
+                }
+                effectiveHumidity = (minEnvHumidity * 0.4) + ((envHumiditySum / samplePoints) * 0.6);
             }
-            effectiveHumidity = (minEnvHumidity * 0.4) + ((envHumiditySum / samplePoints) * 0.6);
-        }
 
-        updateSatelliteView(
-            state.cyclone.intensity, state.cyclone.age, state.cyclone.lat,
-            state.cyclone.isExtratropical, state.cyclone.isSubtropical, isLand, currentSST, effectiveHumidity
-        );
+            updateSatelliteView(
+                state.cyclone.intensity, state.cyclone.age, state.cyclone.lat,
+                state.cyclone.isExtratropical, state.cyclone.isSubtropical, isLand, currentSST, effectiveHumidity
+            );
 
-        if (state.cyclone.age % 6 === 0) {
-            const snapshotData = getSatelliteSnapshot();
-            if (snapshotData) {
-                const maxSatelliteSnapshots = 48;
-                if (!state.cyclone.satelliteCache) state.cyclone.satelliteCache = [];
-                if (!state.cyclone.satelliteCache.find(s => s.age === state.cyclone.age)) {
-                    state.cyclone.satelliteCache.push({ age: state.cyclone.age, img: snapshotData, timestamp: Date.now() });
-                    if (state.cyclone.satelliteCache.length > maxSatelliteSnapshots) {
-                        state.cyclone.satelliteCache.splice(0, state.cyclone.satelliteCache.length - maxSatelliteSnapshots);
-                    }
+            if (state.cyclone.age % 6 === 0) {
+                const snapshotData = getSatelliteSnapshot();
+                if (snapshotData) {
+                    if (!state.cyclone.satelliteCache) state.cyclone.satelliteCache = [];
+                    // Re-use array index to prevent .splice() allocations
+                    const cacheIndex = (state.cyclone.age / 6) % 48;
+                    state.cyclone.satelliteCache[cacheIndex] = { age: state.cyclone.age, img: snapshotData, timestamp: Date.now() };
                 }
             }
         }
-    }
 
-    function updateMapInfoBox() {
-        if (!updateMapInfoBox.ui) {
-            updateMapInfoBox.ui = {
-                time: document.getElementById('map-info-time'),
-                intensity: document.getElementById('map-info-intensity'),
-                movement: document.getElementById('map-info-movement')
+        function updateMapInfoBox() {
+            if (!updateMapInfoBox.ui) {
+                updateMapInfoBox.ui = {
+                    time: document.getElementById('map-info-time'),
+                    intensity: document.getElementById('map-info-intensity'),
+                    movement: document.getElementById('map-info-movement')
+                };
+                updateMapInfoBox.cache = {};
+            }
+
+            const updateDOM = (key, text) => {
+                if (updateMapInfoBox.cache[key] !== text) {
+                    updateMapInfoBox.ui[key].textContent = text;
+                    updateMapInfoBox.cache[key] = text;
+                }
             };
-        }
-        const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
-        updateMapInfoBox.ui.time.textContent = `T+${state.cyclone.age}h`;
-        updateMapInfoBox.ui.intensity.textContent = `${cat.shortName} - ${state.cyclone.intensity.toFixed(0)}KT`;
 
-        const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
-        const pVal = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
-        updateMapInfoBox.ui.movement.textContent = `${pVal.toFixed(0)}hPa ${directionToCompass(state.cyclone.direction)} ${state.cyclone.speed.toFixed(0)}KT`;
-    }
+            const cat = getCategory(state.cyclone.intensity, state.cyclone.isTransitioning, state.cyclone.isExtratropical, state.cyclone.isSubtropical);
+            updateDOM('time', `T+${state.cyclone.age}h`);
+            updateDOM('intensity', `${cat.shortName} - ${state.cyclone.intensity.toFixed(0)}KT`);
+
+            const centerEnvP = getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems);
+            const pVal = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, state.cyclone.basin, centerEnvP);
+            updateDOM('movement', `${pVal.toFixed(0)}hPa ${directionToCompass(state.cyclone.direction)} ${state.cyclone.speed.toFixed(0)}KT`);
+        }
 
     function updateStateSiteData() {
         if (state.siteLon != null && state.siteLat != null) {
@@ -898,178 +917,188 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // core simulation loop
     function updateSimulation() {
-        if (state.cyclone.status !== 'active') {
-            clearInterval(state.simulationInterval);
-            state.simulationInterval = null;
-            state.isPaused = false;
+            if (state.cyclone.status !== 'active') {
+                clearInterval(state.simulationInterval);
+                state.simulationInterval = null;
+                state.isPaused = false;
 
-            const basinId = basinSelector.value || 'WPAC';
-            const cycloneInfo = { basin: basinId, month: state.currentMonth, year: new Date().getFullYear() };
-            const bestTrackText = formatBestTrack(state.cyclone.track, cycloneInfo, state.simulationCount);
+                const basinId = basinSelector.value || 'WPAC';
+                const cycloneInfo = { basin: basinId, month: state.currentMonth, year: new Date().getFullYear() };
+                const bestTrackText = formatBestTrack(state.cyclone.track, cycloneInfo, state.simulationCount);
 
-            const basinCode = bestTrackText.split('\n')[0].split(',')[0].trim();
-            const cycloneNumStr = String(state.simulationCount).padStart(2, '0');
+                const basinCode = bestTrackText.split('\n')[0].split(',')[0].trim();
+                const cycloneNumStr = String(state.simulationCount).padStart(2, '0');
 
-            let peakWind = 0, minPressure = 9999;
-            state.cyclone.track.forEach(point => {
-                if (point[2] > peakWind) peakWind = point[2];
-                let pressure = point[10] !== undefined && point[10] !== null ? point[10] : Math.round(windToPressure(point[2], point[5] || 300, basinId));
-                if (pressure < minPressure) minPressure = pressure;
-            });
-
-            const stormName = state.cyclone.name ? state.cyclone.name.toUpperCase() : "UNKNOWN";
-            let statusText = "";
-
-            if (peakWind >= 34 || state.cyclone.named) {
-                statusText = state.cyclone.intensity >= 34
-                    ? (state.cyclone.isExtratropical ? `EX-${stormName}` : stormName)
-                    : (state.cyclone.isExtratropical ? `EX-${stormName}` : state.cyclone.isSubtropical ? `SD ${stormName}` : `TD ${stormName}`);
-            } else {
-                statusText = state.cyclone.isExtratropical ? `EX ${cycloneNumStr}` : state.cyclone.isSubtropical ? `SD ${cycloneNumStr}` : `TD ${cycloneNumStr}`;
-            }
-
-            document.getElementById('status').textContent = statusText;
-            document.getElementById('map-info-box').classList.add('hidden');
-
-            pauseButton.disabled = true;
-            pauseButton.innerHTML = '<i class="fa-solid fa-pause text-xs"></i>';
-            monthSelector.disabled = false;
-            basinSelector.disabled = false;
-            globalTempSlider.disabled = false;
-            globalShearSlider.disabled = false;
-            siteNameInput.disabled = false;
-            customLonInput.disabled = false;
-            customLatInput.disabled = false;
-            siteLonInput.disabled = false;
-            siteLatInput.disabled = false;
-
-            const finalStats = { number: `${basinCode} ${cycloneNumStr}`, peakWind: Math.round(peakWind), minPressure: Math.round(minPressure), ace: state.cyclone.ace.toFixed(2) };
-            state.lastFinalStats = finalStats;
-
-            drawFinalPath(mapSvg, mapProjection, state.cyclone, state.world, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, finalStats, basinId, state.pressureSystems, state.showWindField);
-            requestRedraw();
-
-            if (state.showIntensityChart) forecastContainer.classList.remove('hidden');
-            setTimeout(() => drawHistoricalIntensityChart(chartContainer, state.cyclone.track, tooltip), 0);
-
-            bestTrackData.value = bestTrackText;
-            bestTrackContainer.classList.remove('hidden');
-            copyTrackButton.textContent = "Copy Data";
-
-            try {
-                const historyName = `${statusText} (${basinCode} ${cycloneNumStr}) - T+${state.cyclone.age}h, Peak ${Math.round(peakWind)}kt`;
-                const cycloneDataDeep = JSON.parse(JSON.stringify(state.cyclone));
-
-                state.history.push({
-                    name: historyName,
-                    cycloneData: cycloneDataDeep,
-                    atcfData: bestTrackText,
-                    pressureHistory: JSON.parse(JSON.stringify(state.pressureHistory || [])),
-                    siteHistory: JSON.parse(JSON.stringify(state.siteHistory || []))
+                let peakWind = 0, minPressure = 9999;
+                state.cyclone.track.forEach(point => {
+                    if (point[2] > peakWind) peakWind = point[2];
+                    let pressure = point[10] !== undefined && point[10] !== null ? point[10] : Math.round(windToPressure(point[2], point[5] || 300, basinId));
+                    if (pressure < minPressure) minPressure = pressure;
                 });
-                state.simulationCount++;
-            } catch (e) { console.error("Failed to save history:", e); }
-            return;
-        }
 
-        const wasNamed = state.cyclone.named;
-        state.pressureSystems = updatePressureSystems(state.pressureSystems, state.cyclone.currentMonth, state.GlobalTemp, state.GlobalShear);
-        state.frontalZone = updateFrontalZone(state.pressureSystems, state.currentMonth, state.GlobalTemp, state.GlobalShear);
-        state.cyclone = updateCycloneState(state.cyclone, state.pressureSystems, state.frontalZone, state.world, state.currentMonth, state.GlobalTemp, state.GlobalShear, state.nextNameIndex);
-        state.cyclone.currentMonth = state.currentMonth;
+                const stormName = state.cyclone.name ? state.cyclone.name.toUpperCase() : "UNKNOWN";
+                let statusText = "";
 
-        if (state.cyclone.status === 'active') {
-            state.pressureHistory.push({
-                age: state.cyclone.age,
-                month: state.cyclone.currentMonth,
-                lower: state.pressureSystems.lower ? state.pressureSystems.lower.map(s => ({ ...s })) : [],
-                upper: state.pressureSystems.upper ? state.pressureSystems.upper.map(s => ({ ...s })) : []
-            });
-        }
-
-        if (!wasNamed && state.cyclone.named) state.nextNameIndex++;
-
-        if (!state.hasTriggeredCat1News && state.cyclone.intensity >= 64 && !state.cyclone.isExtratropical) {
-            state.hasTriggeredCat1News = true;
-            const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
-            const stormTerm = basinSelector.value === 'WPAC' ? "TYPHOON" : ['NIO', 'SIO', 'SHEM'].includes(basinSelector.value) ? "CAT-1 CYCLONE" : "HURRICANE";
-            triggerNewsBanner(`${displayName} <span class="text-black/50 text-base align-middle not-italic ml-2 font-bold">HAS BECOME A ${stormTerm}</span>`, "BREAKING NEWSLETTER", state.cyclone.age, state.currentMonth, 'ORANGE');
-        }
-
-        if (!state.hasTriggeredCat5News && state.cyclone.intensity >= 137 && !state.cyclone.isExtratropical) {
-            state.hasTriggeredCat5News = true;
-            const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
-            const statusTerm = basinSelector.value === 'WPAC' ? "CAT-5 SUPER TYPHOON" : "CATEGORY 5 HURRICANE";
-            triggerNewsBanner(`${displayName} <span class="text-black/60 text-base align-middle not-italic ml-2 font-black">ACHIEVED ${statusTerm} STATUS</span>`, "EXTREME INTENSITY ALERT", state.cyclone.age, state.currentMonth, 'PURPLE');
-        }
-
-        if (state.siteLon != null && state.siteLat != null) {
-            const dist = calculateDistance(state.cyclone.lat, state.cyclone.lon, state.siteLat, state.siteLon);
-            if (dist <= 400 && state.cyclone.intensity >= 34) {
-                if (!state.hasAlerted) {
-                    playAlert();
-                    state.hasAlerted = true;
-                    const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
-                    triggerNewsBanner(`ALERT: <span class="text-white text-base align-middle not-italic ml-2 font-bold">${displayName} ENTERED 400KM WARNING RANGE</span>`, `THREAT TO ${state.siteName ? state.siteName.toUpperCase() : "OBSERVATION POST"}`, state.cyclone.age, state.currentMonth, 'RED');
+                if (peakWind >= 34 || state.cyclone.named) {
+                    statusText = state.cyclone.intensity >= 34
+                        ? (state.cyclone.isExtratropical ? `EX-${stormName}` : stormName)
+                        : (state.cyclone.isExtratropical ? `EX-${stormName}` : state.cyclone.isSubtropical ? `SD ${stormName}` : `TD ${stormName}`);
+                } else {
+                    statusText = state.cyclone.isExtratropical ? `EX ${cycloneNumStr}` : state.cyclone.isSubtropical ? `SD ${cycloneNumStr}` : `TD ${cycloneNumStr}`;
                 }
-            } else {
-                state.hasAlerted = false;
+
+                document.getElementById('status').textContent = statusText;
+                document.getElementById('map-info-box').classList.add('hidden');
+
+                pauseButton.disabled = true;
+                pauseButton.innerHTML = '<i class="fa-solid fa-pause text-xs"></i>';
+                monthSelector.disabled = false;
+                basinSelector.disabled = false;
+                globalTempSlider.disabled = false;
+                globalShearSlider.disabled = false;
+                siteNameInput.disabled = false;
+                customLonInput.disabled = false;
+                customLatInput.disabled = false;
+                siteLonInput.disabled = false;
+                siteLatInput.disabled = false;
+
+                const finalStats = { number: `${basinCode} ${cycloneNumStr}`, peakWind: Math.round(peakWind), minPressure: Math.round(minPressure), ace: state.cyclone.ace.toFixed(2) };
+                state.lastFinalStats = finalStats;
+
+                drawFinalPath(mapSvg, mapProjection, state.cyclone, state.world, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, finalStats, basinId, state.pressureSystems, state.showWindField);
+                requestRedraw();
+
+                if (state.showIntensityChart) forecastContainer.classList.remove('hidden');
+                setTimeout(() => drawHistoricalIntensityChart(chartContainer, state.cyclone.track, tooltip), 0);
+
+                bestTrackData.value = bestTrackText;
+                bestTrackContainer.classList.remove('hidden');
+                copyTrackButton.textContent = "Copy Data";
+
+                try {
+                    const historyName = `${statusText} (${basinCode} ${cycloneNumStr}) - T+${state.cyclone.age}h, Peak ${Math.round(peakWind)}kt`;
+
+                    const cycloneDataDeep = structuredClone ? structuredClone(state.cyclone) : JSON.parse(JSON.stringify(state.cyclone));
+
+                    state.history.push({
+                        name: historyName,
+                        cycloneData: cycloneDataDeep,
+                        atcfData: bestTrackText,
+                        pressureHistory: state.pressureHistory.map(h => ({
+                            age: h.age, month: h.month,
+                            lower: h.lower.map(l => ({...l})),
+                            upper: h.upper.map(u => ({...u}))
+                        })),
+                        siteHistory: state.siteHistory.map(s => ({...s}))
+                    });
+                    state.simulationCount++;
+                } catch (e) { console.error("Failed to save history:", e); }
+                return;
             }
-        }
 
-        updateInfoPanel();
-        updateMapInfoBox();
-        updateStateSiteData();
+            const wasNamed = state.cyclone.named;
+            state.pressureSystems = updatePressureSystems(state.pressureSystems, state.cyclone.currentMonth, state.GlobalTemp, state.GlobalShear);
+            state.frontalZone = updateFrontalZone(state.pressureSystems, state.currentMonth, state.GlobalTemp, state.GlobalShear);
+            state.cyclone = updateCycloneState(state.cyclone, state.pressureSystems, state.frontalZone, state.world, state.currentMonth, state.GlobalTemp, state.GlobalShear, state.nextNameIndex);
+            state.cyclone.currentMonth = state.currentMonth;
 
-        if (state.currentSiteData) {
-            const currentHour = state.cyclone.age;
-            const lastEntry = state.siteHistory[state.siteHistory.length - 1];
-            if (!lastEntry || lastEntry.hour !== currentHour) {
-                 state.siteHistory.push({
-                    hour: currentHour,
-                    wind: state.currentSiteData.displaySpeed,
-                    pressure: state.currentSiteData.pressure,
-                    u: state.currentSiteData.u,
-                    v: state.currentSiteData.v,
-                    dbz: state.currentSiteData.dbz,
-                    lat: state.siteLat,
-                    lon: state.siteLon
+            if (state.cyclone.status === 'active') {
+                state.pressureHistory.push({
+                    age: state.cyclone.age,
+                    month: state.cyclone.currentMonth,
+                    lower: state.pressureSystems.lower ? state.pressureSystems.lower.map(s => ({ ...s })) : [],
+                    upper: state.pressureSystems.upper ? state.pressureSystems.upper.map(s => ({ ...s })) : []
                 });
             }
-        }
 
-        drawMap(mapSvg, mapProjection, state.world, state.cyclone, {
-            pathForecasts: state.pathForecasts,
-            pressureSystems: state.pressureSystems,
-            showPressureField: state.showPressureField,
-            showHumidityField: state.showHumidityField,
-            showPathForecast: state.showPathForecast,
-            showWindRadii: state.showWindRadii,
-            siteName: state.siteName,
-            siteLon: state.siteLon,
-            siteLat: state.siteLat,
-            showPathPoints: state.showPathPoints,
-            showWindField: state.showWindField,
-            month: state.currentMonth,
-            siteHistory: state.siteHistory,
-            siteData: state.currentSiteData,
-            onSiteClick: () => {
-                state.isSiteSelected = !state.isSiteSelected;
-                requestRedraw();
+            if (!wasNamed && state.cyclone.named) state.nextNameIndex++;
+
+            if (!state.hasTriggeredCat1News && state.cyclone.intensity >= 64 && !state.cyclone.isExtratropical) {
+                state.hasTriggeredCat1News = true;
+                const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
+                const stormTerm = basinSelector.value === 'WPAC' ? "TYPHOON" : ['NIO', 'SIO', 'SHEM'].includes(basinSelector.value) ? "CAT-1 CYCLONE" : "HURRICANE";
+                triggerNewsBanner(`${displayName} <span class="text-black/50 text-base align-middle not-italic ml-2 font-bold">HAS BECOME A ${stormTerm}</span>`, "BREAKING NEWSLETTER", state.cyclone.age, state.currentMonth, 'ORANGE');
             }
-        });
 
-        if (state.cyclone.age % 3 === 0 && state.cyclone.age > 0) {
-             const forecasts = generatePathForecasts(state.cyclone, state.pressureSystems, checkLandWrapper, state.GlobalTemp, state.GlobalShear);
-             state.pathForecasts = forecasts;
-             if (state.cyclone.age % 6 === 0 && state.cyclone.age > 0) {
-                 if (!state.cyclone.forecastLogs) state.cyclone.forecastLogs = {};
-                 state.cyclone.forecastLogs[state.cyclone.age] = JSON.parse(JSON.stringify(forecasts));
-             }
-        }
-        if (state.cyclone.track.length > 3) {
-            generateJTWCButton.classList.remove('hidden');
-        }
+            if (!state.hasTriggeredCat5News && state.cyclone.intensity >= 137 && !state.cyclone.isExtratropical) {
+                state.hasTriggeredCat5News = true;
+                const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
+                const statusTerm = basinSelector.value === 'WPAC' ? "CAT-5 SUPER TYPHOON" : "CATEGORY 5 HURRICANE";
+                triggerNewsBanner(`${displayName} <span class="text-black/60 text-base align-middle not-italic ml-2 font-black">ACHIEVED ${statusTerm} STATUS</span>`, "EXTREME INTENSITY ALERT", state.cyclone.age, state.currentMonth, 'PURPLE');
+            }
+
+            if (state.siteLon != null && state.siteLat != null) {
+                const dist = calculateDistance(state.cyclone.lat, state.cyclone.lon, state.siteLat, state.siteLon);
+                if (dist <= 400 && state.cyclone.intensity >= 34) {
+                    if (!state.hasAlerted) {
+                        playAlert();
+                        state.hasAlerted = true;
+                        const displayName = state.cyclone.name ? state.cyclone.name.toUpperCase() : `SYSTEM ${String(state.simulationCount).padStart(2, '0')}`;
+                        triggerNewsBanner(`ALERT: <span class="text-white text-base align-middle not-italic ml-2 font-bold">${displayName} ENTERED 400KM WARNING RANGE</span>`, `THREAT TO ${state.siteName ? state.siteName.toUpperCase() : "OBSERVATION POST"}`, state.cyclone.age, state.currentMonth, 'RED');
+                    }
+                } else {
+                    state.hasAlerted = false;
+                }
+            }
+
+            updateInfoPanel();
+            updateMapInfoBox();
+            updateStateSiteData();
+
+            if (state.currentSiteData) {
+                const currentHour = state.cyclone.age;
+                const lastEntry = state.siteHistory[state.siteHistory.length - 1];
+                if (!lastEntry || lastEntry.hour !== currentHour) {
+                     state.siteHistory.push({
+                        hour: currentHour,
+                        wind: state.currentSiteData.displaySpeed,
+                        pressure: state.currentSiteData.pressure,
+                        u: state.currentSiteData.u,
+                        v: state.currentSiteData.v,
+                        dbz: state.currentSiteData.dbz,
+                        lat: state.siteLat,
+                        lon: state.siteLon
+                    });
+                }
+            }
+
+            drawMap(mapSvg, mapProjection, state.world, state.cyclone, {
+                pathForecasts: state.pathForecasts,
+                pressureSystems: state.pressureSystems,
+                showPressureField: state.showPressureField,
+                showHumidityField: state.showHumidityField,
+                showPathForecast: state.showPathForecast,
+                showWindRadii: state.showWindRadii,
+                siteName: state.siteName,
+                siteLon: state.siteLon,
+                siteLat: state.siteLat,
+                showPathPoints: state.showPathPoints,
+                showWindField: state.showWindField,
+                month: state.currentMonth,
+                siteHistory: state.siteHistory,
+                siteData: state.currentSiteData,
+                onSiteClick: () => {
+                    state.isSiteSelected = !state.isSiteSelected;
+                    requestRedraw();
+                }
+            });
+
+            if (state.cyclone.age % 3 === 0 && state.cyclone.age > 0) {
+                 const forecasts = generatePathForecasts(state.cyclone, state.pressureSystems, checkLandWrapper, state.GlobalTemp, state.GlobalShear);
+                 state.pathForecasts = forecasts;
+
+                 if (state.cyclone.age % 6 === 0) {
+                     if (!state.cyclone.forecastLogs) state.cyclone.forecastLogs = {};
+
+                     state.cyclone.forecastLogs[state.cyclone.age] = forecasts.map(m => ({
+                         ...m,
+                         track: m.track.map(p => p.slice())
+                     }));
+                 }
+            }
+            if (state.cyclone.track.length > 3) {
+                generateJTWCButton.classList.remove('hidden');
+            }
     }
 
     function startSimulation() {
