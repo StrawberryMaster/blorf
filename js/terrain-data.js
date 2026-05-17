@@ -18,11 +18,11 @@ export function initTerrainSystem(imageUrl, worldData) {
         const img = new Image();
         img.crossOrigin = "Anonymous";
         img.src = imageUrl;
-        
+
         img.onload = () => {
             mapWidth = img.width;
             mapHeight = img.height;
-            
+
             const canvas = document.createElement('canvas');
             canvas.width = mapWidth;
             canvas.height = mapHeight;
@@ -32,12 +32,11 @@ export function initTerrainSystem(imageUrl, worldData) {
             ctx.drawImage(img, 0, 0);
             const elevRaw = ctx.getImageData(0, 0, mapWidth, mapHeight).data;
             const totalPixels = mapWidth * mapHeight;
-            
+
             elevationData = new Uint8Array(totalPixels);
-            
-            // extract only the red channel (stride of 4)
-            for (let i = 0; i < totalPixels; i++) {
-                elevationData[i] = elevRaw[i * 4];
+
+            for (let i = 0, j = 0; i < totalPixels; i++, j += 4) {
+                elevationData[i] = elevRaw[j];
             }
             
             // generate land mask
@@ -62,16 +61,16 @@ export function initTerrainSystem(imageUrl, worldData) {
 
                 const maskRaw = ctx.getImageData(0, 0, mapWidth, mapHeight).data;
                 landMaskData = new Uint8Array(totalPixels);
-                
-                for (let i = 0; i < totalPixels; i++) {
-                    landMaskData[i] = maskRaw[i * 4];
+
+                for (let i = 0, j = 0; i < totalPixels; i++, j += 4) {
+                    landMaskData[i] = maskRaw[j];
                 }
             }
 
             console.log(`Terrain system initialized. Size: ${mapWidth}x${mapHeight}`);
             resolve();
         };
-        
+
         img.onerror = () => reject(new Error("Failed to load elevation map"));
     });
 }
@@ -92,40 +91,57 @@ function getPixelCoords(lon, lat) {
     return { x, y };
 }
 
+const STATUS_WATER = { isLand: false, isNearLand: false };
+const STATUS_NEAR  = { isLand: false, isNearLand: true };
+const STATUS_LAND  = { isLand: true, isNearLand: true };
+
 export function getElevationAt(lon, lat) {
     if (!elevationData) return 0;
-    
-    const { x, y } = getPixelCoords(lon, lat);
-    const brightness = elevationData[y * mapWidth + x]; 
-    
+
+    let normLon = lon % 360;
+    if (normLon < -180) normLon += 360;
+    else if (normLon > 180) normLon -= 360;
+
+    let x = ~~(((normLon + 180) * inv360) * mapWidth);
+    let y = ~~(((90 - lat) * inv180) * mapHeight);
+
+    if (x < 0) x = 0; else if (x >= mapWidth) x = mapWidth - 1;
+    if (y < 0) y = 0; else if (y >= mapHeight) y = mapHeight - 1;
+
+    const brightness = elevationData[y * mapWidth + x];
+
     // skip tiny values to reduce math overhead for flat oceans
     if (brightness < 5) return 0;
     return (brightness / 255) * MAX_ELEVATION_METERS;
 }
 
 export function getLandStatus(lon, lat, nearThresholdDeg = 0.2) {
-    if (!landMaskData) return { isLand: false, isNearLand: false };
+    if (!landMaskData) return STATUS_WATER;
 
-    const { x: cx, y: cy } = getPixelCoords(lon, lat);
+    // coordinate mapping
+    let normLon = lon % 360;
+    if (normLon < -180) normLon += 360;
+    else if (normLon > 180) normLon -= 360;
+
+    let cx = ~~(((normLon + 180) * inv360) * mapWidth);
+    let cy = ~~(((90 - lat) * inv180) * mapHeight);
+
+    if (cx < 0) cx = 0; else if (cx >= mapWidth) cx = mapWidth - 1;
+    if (cy < 0) cy = 0; else if (cy >= mapHeight) cy = mapHeight - 1;
+
     const centerIdx = cy * mapWidth + cx;
-    
-    // threshold check ( > 128 means white/land)
-    const isLand = landMaskData[centerIdx] > 128;
-    
-    // fast exit if already directly on land
-    if (isLand) return { isLand: true, isNearLand: true };
 
-    // determine search radius in pixels
+    // fast exit if directly on land
+    if (landMaskData[centerIdx] > 128) return STATUS_LAND;
+
     const radius = Math.max(1, Math.ceil(nearThresholdDeg * mapWidth * inv360));
-
-    // pre-calculate vertical bounds
     const startY = Math.max(0, cy - radius);
     const endY = Math.min(mapHeight - 1, cy + radius);
 
     // scan neighborhood
     for (let y = startY; y <= endY; y++) {
         const rowOffset = y * mapWidth;
-        
+
         for (let dx = -radius; dx <= radius; dx++) {
             let nx = cx + dx;
             
@@ -135,10 +151,10 @@ export function getLandStatus(lon, lat, nearThresholdDeg = 0.2) {
 
             // 1D index check
             if (landMaskData[rowOffset + nx] > 128) {
-                return { isLand: false, isNearLand: true };
+                return STATUS_NEAR;
             }
         }
     }
 
-    return { isLand: false, isNearLand: false };
+    return STATUS_WATER;
 }

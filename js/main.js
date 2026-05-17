@@ -574,39 +574,37 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function formatBestTrack(track, cycloneInfo, simulationCount, stepHours = 3) {
-        const basinMap = { 'WPAC': 'WP', 'EPAC': 'EP', 'NATL': 'AL', 'NIO': 'IO', 'SHEM': 'SH', 'SIO': 'SH', 'SATL': 'SL' };
-        const basin = basinMap[cycloneInfo.basin] || 'WP';
-        const cycloneNum = String(simulationCount).padStart(2, '0');
-        const startDate = new Date(Date.UTC(cycloneInfo.year, cycloneInfo.month - 1, 1));
+            const basinMap = { 'WPAC': 'WP', 'EPAC': 'EP', 'NATL': 'AL', 'NIO': 'IO', 'SHEM': 'SH', 'SIO': 'SH', 'SATL': 'SL' };
+            const basin = (basinMap[cycloneInfo.basin] || 'WP').padEnd(2, ' ');
+            const cycloneNum = String(simulationCount).padStart(3, ' ');
+            const startDateMs = new Date(Date.UTC(cycloneInfo.year, cycloneInfo.month - 1, 1)).getTime();
 
-        return track.map((point, index) => {
-            const currentDate = new Date(startDate);
-            currentDate.setUTCHours(currentDate.getUTCHours() + index * stepHours);
+            let output = "";
+            const stepMs = stepHours * 3600000;
 
-            const dateString = `${currentDate.getUTCFullYear()}${String(currentDate.getUTCMonth() + 1).padStart(2, '0')}${String(currentDate.getUTCDate()).padStart(2, '0')}${String(currentDate.getUTCHours()).padStart(2, '0')}`;
-            const lat = formatDegreeWithHemisphere(point[1], true);
-            const lon = formatDegreeWithHemisphere(point[0], false);
+            for (let i = 0; i < track.length; i++) {
+                const point = track[i];
+                const currentDate = new Date(startDateMs + (i * stepMs));
 
-            const vmax = Math.round(point[2]);
-            const mslp = point[10] !== undefined && point[10] !== null
-                ? point[10]
-                : Math.round(windToPressure(vmax, point[5] || 300, cycloneInfo.basin, getPressureAt(point[0], point[1], state.pressureSystems)));
-            const type = getAtcfTypeCode(vmax, point[4], point[6]);
+                const yyyy = currentDate.getUTCFullYear();
+                const mm = String(currentDate.getUTCMonth() + 1).padStart(2, '0');
+                const dd = String(currentDate.getUTCDate()).padStart(2, '0');
+                const hh = String(currentDate.getUTCHours()).padStart(2, '0');
 
-            return [
-                basin.padEnd(2, ' '),
-                cycloneNum.padStart(3, ' '),
-                ` ${dateString}`,
-                ' 00',
-                ' BEST',
-                '   0',
-                lat.padStart(6, ' '),
-                lon.padStart(7, ' '),
-                String(vmax).padStart(4, ' '),
-                String(mslp).padStart(5, ' '),
-                ` ${type}`
-            ].join(', ');
-        }).join('\n');
+                const lat = formatDegreeWithHemisphere(point[1], true).padStart(6, ' ');
+                const lon = formatDegreeWithHemisphere(point[0], false).padStart(7, ' ');
+
+                const vmax = Math.round(point[2]);
+                const mslp = point[10] !== undefined && point[10] !== null
+                    ? point[10]
+                    : Math.round(windToPressure(vmax, point[5] || 300, cycloneInfo.basin, getPressureAt(point[0], point[1], state.pressureSystems)));
+
+                const type = getAtcfTypeCode(vmax, point[4], point[6]);
+
+                output += `${basin}, ${cycloneNum},  ${yyyy}${mm}${dd}${hh},  00,  BEST,    0, ${lat}, ${lon}, ${String(vmax).padStart(4, ' ')}, ${String(mslp).padStart(5, ' ')},  ${type}\n`;
+            }
+
+            return output.trim();
     }
 
     function drawRadarScope() {
@@ -810,7 +808,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const snapshotData = getSatelliteSnapshot();
                 if (snapshotData) {
                     if (!state.cyclone.satelliteCache) state.cyclone.satelliteCache = [];
-                    // Re-use array index to prevent .splice() allocations
                     const cacheIndex = (state.cyclone.age / 6) % 48;
                     state.cyclone.satelliteCache[cacheIndex] = { age: state.cyclone.age, img: snapshotData, timestamp: Date.now() };
                 }
@@ -843,77 +840,85 @@ document.addEventListener('DOMContentLoaded', () => {
             updateDOM('movement', `${pVal.toFixed(0)}hPa ${directionToCompass(state.cyclone.direction)} ${state.cyclone.speed.toFixed(0)}KT`);
         }
 
-    function updateStateSiteData() {
-        if (state.siteLon != null && state.siteLat != null) {
-            let vec = getWindVectorAt(state.siteLon, state.siteLat, state.currentMonth, state.cyclone, state.pressureSystems);
+        function updateStateSiteData() {
+                if (state.siteLon != null && state.siteLat != null) {
+                    let vec = getWindVectorAt(state.siteLon, state.siteLat, state.currentMonth, state.cyclone, state.pressureSystems);
 
-            // geographic operations
-            if (state.world) {
-                if (state.siteLon !== state.cachedSiteLon || state.siteLat !== state.cachedSiteLat) {
-                    state.cachedSiteLon = state.siteLon;
-                    state.cachedSiteLat = state.siteLat;
-                    state.cachedSiteFriction = 1.0;
+                    if (state.world) {
+                        if (state.siteLon !== state.cachedSiteLon || state.siteLat !== state.cachedSiteLat) {
+                            state.cachedSiteLon = state.siteLon;
+                            state.cachedSiteLat = state.siteLat;
+                            state.cachedSiteFriction = 1.0;
 
-                    const landStatus = getLandStatus(state.siteLon, state.siteLat, 0.1);
-                    if (landStatus.isLand) {
-                        state.cachedSiteFriction = 0.78;
-                    } else if (landStatus.isNearLand) {
-                        state.cachedSiteFriction = 0.89;
+                            const landStatus = getLandStatus(state.siteLon, state.siteLat, 0.1);
+                            if (landStatus.isLand) {
+                                state.cachedSiteFriction = 0.78;
+                            } else if (landStatus.isNearLand) {
+                                state.cachedSiteFriction = 0.89;
+                            }
+                        }
+
+                        vec.magnitude *= state.cachedSiteFriction;
+                        vec.u *= state.cachedSiteFriction;
+                        vec.v *= state.cachedSiteFriction;
                     }
+
+                    const speedKt = Math.round(vec.magnitude + Math.random());
+                    const flowAngleMath = Math.atan2(-vec.v, vec.u) * (180 / Math.PI);
+                    let windDir = (flowAngleMath + 250) % 360;
+                    if (windDir < 0) windDir += 360;
+                    const dirText = directionToCompass(windDir);
+
+                    state.cachedHumidity = calculateBackgroundHumidity(
+                        state.siteLon, state.siteLat, state.pressureSystems,
+                        state.currentMonth, state.cyclone && state.cyclone.status === 'active' ? state.cyclone : null,
+                        state.GlobalTemp
+                    ) / 100.0;
+
+                    const dbz = calculateRadarDbz(state.siteLon, state.siteLat, state);
+                    let weatherIcon = '<i class="fa-solid fa-sun text-yellow-500"></i>';
+                    if (dbz >= 50) weatherIcon = '<i class="fa-solid fa-cloud-bolt text-yellow-500"></i>';
+                    else if (dbz >= 35) weatherIcon = '<i class="fa-solid fa-cloud-showers-heavy text-blue-500"></i>';
+                    else if (dbz >= 15) weatherIcon = '<i class="fa-solid fa-cloud-rain text-blue-400"></i>';
+                    else if (dbz >= 5) weatherIcon = '<i class="fa-solid fa-cloud text-slate-400"></i>';
+
+                    const label = `${weatherIcon} <span style="margin-left:2px;">${dirText}</span> / ${speedKt}KT`;
+                    let localPressure = 1010;
+
+                    const currentSimHour = (state.cyclone && state.cyclone.age) ? state.cyclone.age : 0;
+                    const localHour = (currentSimHour + state.siteLon / 15) % 24;
+                    const latFactor = Math.max(0, Math.cos(state.siteLat * Math.PI / 180));
+                    const tideAmplitude = 1.6 * latFactor;
+                    const diurnalBias = tideAmplitude * Math.cos(((localHour - 10) / 12) * 2 * Math.PI);
+                    const microNoise = (Math.random() - 0.5) * 0.2;
+                    const Pn = getPressureAt(state.siteLon, state.siteLat, state.pressureSystems);
+
+                    if (state.cyclone && state.cyclone.status === 'active') {
+                        const distKm = calculateDistance(state.cyclone.lat, state.cyclone.lon, state.siteLat, state.siteLon);
+                        const Rm = 10 + state.cyclone.circulationSize * 0.25;
+                        const Pc = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, basinSelector.value, getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems));
+                        localPressure = Pc + (Pn - Pc) * Math.exp(-Rm / Math.max(1, distKm)) + diurnalBias + microNoise;
+                    } else {
+                        localPressure = Pn + diurnalBias + microNoise;
+                    }
+
+                    if (!state.currentSiteData) {
+                        state.currentSiteData = {};
+                    }
+
+                    state.currentSiteData.u = vec.u;
+                    state.currentSiteData.v = vec.v;
+                    state.currentSiteData.magnitude = vec.magnitude;
+                    state.currentSiteData.displaySpeed = speedKt;
+                    state.currentSiteData.label = label;
+                    state.currentSiteData.dbz = dbz;
+                    state.currentSiteData.pressure = localPressure;
+                    state.currentSiteData.isSelected = state.isSiteSelected;
+
+                } else {
+                    state.currentSiteData = null;
                 }
-
-                vec.magnitude *= state.cachedSiteFriction;
-                vec.u *= state.cachedSiteFriction;
-                vec.v *= state.cachedSiteFriction;
-            }
-
-            const speedKt = Math.round(vec.magnitude + Math.random());
-            const flowAngleMath = Math.atan2(-vec.v, vec.u) * (180 / Math.PI);
-            let windDir = (flowAngleMath + 250) % 360;
-            if (windDir < 0) windDir += 360;
-            const dirText = directionToCompass(windDir);
-
-            // update cached background humidity for radar rendering
-            state.cachedHumidity = calculateBackgroundHumidity(
-                state.siteLon, state.siteLat, state.pressureSystems,
-                state.currentMonth, state.cyclone && state.cyclone.status === 'active' ? state.cyclone : null,
-                state.GlobalTemp
-            ) / 100.0;
-
-            const dbz = calculateRadarDbz(state.siteLon, state.siteLat, state);
-            let weatherIcon = '<i class="fa-solid fa-sun text-yellow-500"></i>';
-            if (dbz >= 50) weatherIcon = '<i class="fa-solid fa-cloud-bolt text-yellow-500"></i>';
-            else if (dbz >= 35) weatherIcon = '<i class="fa-solid fa-cloud-showers-heavy text-blue-500"></i>';
-            else if (dbz >= 15) weatherIcon = '<i class="fa-solid fa-cloud-rain text-blue-400"></i>';
-            else if (dbz >= 5) weatherIcon = '<i class="fa-solid fa-cloud text-slate-400"></i>';
-
-            const label = `${weatherIcon} <span style="margin-left:2px;">${dirText}</span> / ${speedKt}KT`;
-            let localPressure = 1010;
-
-            const currentSimHour = (state.cyclone && state.cyclone.age) ? state.cyclone.age : 0;
-            const localHour = (currentSimHour + state.siteLon / 15) % 24;
-            const latFactor = Math.max(0, Math.cos(state.siteLat * Math.PI / 180));
-            const tideAmplitude = 1.6 * latFactor;
-            const diurnalBias = tideAmplitude * Math.cos(((localHour - 10) / 12) * 2 * Math.PI);
-            const microNoise = (Math.random() - 0.5) * 0.2;
-            const Pn = getPressureAt(state.siteLon, state.siteLat, state.pressureSystems);
-
-            if (state.cyclone && state.cyclone.status === 'active') {
-                const distKm = calculateDistance(state.cyclone.lat, state.cyclone.lon, state.siteLat, state.siteLon);
-                const Rm = 10 + state.cyclone.circulationSize * 0.25;
-                const Pc = windToPressure(state.cyclone.intensity, state.cyclone.circulationSize, basinSelector.value, getPressureAt(state.cyclone.lon, state.cyclone.lat, state.pressureSystems));
-                localPressure = Pc + (Pn - Pc) * Math.exp(-Rm / Math.max(1, distKm)) + diurnalBias + microNoise;
-            } else {
-                localPressure = Pn + diurnalBias + microNoise;
-            }
-
-            state.currentSiteData = {
-                u: vec.u, v: vec.v, magnitude: vec.magnitude, displaySpeed: speedKt, label: label, dbz: dbz, pressure: localPressure, isSelected: state.isSiteSelected
-            };
-        } else {
-            state.currentSiteData = null;
         }
-    }
 
     // core simulation loop
     function updateSimulation() {
