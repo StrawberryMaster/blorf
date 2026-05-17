@@ -416,6 +416,11 @@ export function updateSatelliteView(intensityKnots, age, latitude, isExtratropic
 function render() {
     if (!gl || !program) return;
 
+    if (canvas.clientWidth === 0 && canvas.clientHeight === 0) {
+        requestAnimationFrame(render);
+        return;
+    }
+
     const time = (Date.now() - startTime) * 0.001;
 
     const displayWidth = canvas.clientWidth;

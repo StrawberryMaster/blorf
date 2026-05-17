@@ -622,12 +622,12 @@ export class RadarRenderer {
         gl.viewport(0, 0, width, height);
         gl.clearColor(0.0, 0.0, 0.0, 0.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.uniform1i(this.u_is_monsoon_depression, state.cyclone?.isMonsoonDepression ? 1 : 0);
 
         // skip rendering if cyclone dissipated
         if (state.cyclone && state.cyclone.status === 'dissipated') return;
 
         gl.useProgram(this.program);
+        gl.uniform1i(this.u_is_monsoon_depression, state.cyclone?.isMonsoonDepression ? 1 : 0);
 
         if (state.pressureSystems) {
             const limit = Math.min(state.pressureSystems.length, 20);

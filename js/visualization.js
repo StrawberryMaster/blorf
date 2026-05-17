@@ -687,12 +687,11 @@ export function drawMap(mapSvg, mapProjection, world, cyclone, options = {}) {
 
     if (staticLayer.select(".land").empty()) {
         staticLayer.append("path").datum(d3.geoGraticule().step([10, 10])).attr("class", "graticule");
-        staticLayer.append("g").attr("class", "land-group").selectAll("path")
-            .data(world.features).enter().append("path").attr("class", "land").style("stroke", "none");
+        staticLayer.append("path").datum(world).attr("class", "land").style("stroke", "none");
     }
 
     staticLayer.select(".graticule").attr("d", pathGenerator);
-    staticLayer.select(".land-group").selectAll(".land").attr("d", pathGenerator);
+    staticLayer.select(".land").attr("d", pathGenerator);
 
     if (showWindField && cyclone && cyclone.status === 'active') {
         drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, world);

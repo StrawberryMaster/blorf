@@ -115,6 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let dopplerRenderer = null;
     let radarOverlayCtx = null;
     let radarOverlayCanvas = null;
+    let radarScopeVisible = false;
     const savedIrBw = localStorage.getItem('tcs_ir_bw') === 'true';
 
     if (irBwCheckbox) {
@@ -163,21 +164,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // animation Loop for WebGL radars & stats
     function animate() {
-        stats.begin();
-        if (state.radarMode || state.dopplerMode) {
+        const radarVisible = state.radarMode || state.dopplerMode;
+
+        if (radarVisible) {
+            stats.begin();
             drawRadarScope();
-        } else {
-            if (radarCanvas && !radarCanvas.classList.contains('hidden')) {
+            radarScopeVisible = true;
+            stats.end();
+        } else if (radarScopeVisible) {
+            if (radarCanvas) {
                 radarCanvas.classList.add('hidden');
             }
-            if (radarOverlayCanvas && !radarOverlayCanvas.classList.contains('hidden')) {
+            if (radarOverlayCanvas) {
                 radarOverlayCanvas.classList.add('hidden');
                 if (radarOverlayCtx) {
                     radarOverlayCtx.clearRect(0, 0, radarOverlayCanvas.width, radarOverlayCanvas.height);
                 }
             }
+            radarScopeVisible = false;
         }
-        stats.end();
         requestAnimationFrame(animate);
     }
     requestAnimationFrame(animate);
@@ -616,7 +621,7 @@ document.addEventListener('DOMContentLoaded', () => {
         radarOverlayCanvas.classList.remove('hidden');
 
         const { width, height } = mapContainer.node().getBoundingClientRect();
-        if (radarOverlayCanvas.width !== width) {
+        if (radarOverlayCanvas.width !== width || radarOverlayCanvas.height !== height) {
             radarOverlayCanvas.width = width;
             radarOverlayCanvas.height = height;
         }
@@ -790,9 +795,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.cyclone.age % 6 === 0) {
             const snapshotData = getSatelliteSnapshot();
             if (snapshotData) {
+                const maxSatelliteSnapshots = 48;
                 if (!state.cyclone.satelliteCache) state.cyclone.satelliteCache = [];
                 if (!state.cyclone.satelliteCache.find(s => s.age === state.cyclone.age)) {
                     state.cyclone.satelliteCache.push({ age: state.cyclone.age, img: snapshotData, timestamp: Date.now() });
+                    if (state.cyclone.satelliteCache.length > maxSatelliteSnapshots) {
+                        state.cyclone.satelliteCache.splice(0, state.cyclone.satelliteCache.length - maxSatelliteSnapshots);
+                    }
                 }
             }
         }
@@ -826,21 +835,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     state.cachedSiteLat = state.siteLat;
                     state.cachedSiteFriction = 1.0;
 
-                    const isLand = state.world.features.some(feature => d3.geoContains(feature, [state.siteLon, state.siteLat]));
-                    if (isLand) {
+                    const landStatus = getLandStatus(state.siteLon, state.siteLat, 0.1);
+                    if (landStatus.isLand) {
                         state.cachedSiteFriction = 0.78;
-                    } else {
-                        const nearThreshold = 0.1;
-                        const isNearShore = state.world.features.some(feature => {
-                            const geometry = feature.geometry;
-                            const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
-                            return polygons.some(poly => poly.some(ring => ring.some(vertex => {
-                                let dx = Math.abs(vertex[0] - state.siteLon);
-                                if (dx > 180) dx = 360 - dx;
-                                return dx < nearThreshold && Math.abs(vertex[1] - state.siteLat) < nearThreshold;
-                            })));
-                        });
-                        if (isNearShore) state.cachedSiteFriction = 0.89;
+                    } else if (landStatus.isNearLand) {
+                        state.cachedSiteFriction = 0.89;
                     }
                 }
 
