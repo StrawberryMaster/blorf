@@ -557,7 +557,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return 'LO';
     }
 
-    function formatBestTrack(track, cycloneInfo, simulationCount) {
+    // format decimal degrees with hemisphere letter (e.g. 13.79N, 137.82E)
+    function formatDegreeWithHemisphere(value, isLat) {
+        let val = value;
+        if (!isLat) {
+            if (val > 180) val = val - 360;
+        }
+        const hemi = val >= 0 ? (isLat ? 'N' : 'E') : (isLat ? 'S' : 'W');
+        const absVal = Math.abs(val);
+        return `${absVal.toFixed(2)}${hemi}`;
+    }
+
+    function formatBestTrack(track, cycloneInfo, simulationCount, stepHours = 3) {
         const basinMap = { 'WPAC': 'WP', 'EPAC': 'EP', 'NATL': 'AL', 'NIO': 'IO', 'SHEM': 'SH', 'SIO': 'SH', 'SATL': 'SL' };
         const basin = basinMap[cycloneInfo.basin] || 'WP';
         const cycloneNum = String(simulationCount).padStart(2, '0');
@@ -565,23 +576,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
         return track.map((point, index) => {
             const currentDate = new Date(startDate);
-            currentDate.setUTCHours(currentDate.getUTCHours() + index * 3);
+            currentDate.setUTCHours(currentDate.getUTCHours() + index * stepHours);
 
             const dateString = `${currentDate.getUTCFullYear()}${String(currentDate.getUTCMonth() + 1).padStart(2, '0')}${String(currentDate.getUTCDate()).padStart(2, '0')}${String(currentDate.getUTCHours()).padStart(2, '0')}`;
-            const lat = `${Math.round(point[1] * 10)}N`;
-            let lonValue = point[0] > 180 ? 360 - point[0] : point[0];
-            let lonHemi = point[0] > 180 ? 'W' : 'E';
-            const lon = `${Math.round(lonValue * 10)}${lonHemi}`;
-            const vmax = Math.round(point[2]);
+            const lat = formatDegreeWithHemisphere(point[1], true);
+            const lon = formatDegreeWithHemisphere(point[0], false);
 
-            let mslp = point[10] !== undefined ? point[10] : Math.round(windToPressure(vmax, point[5] || 300, cycloneInfo.basin, getPressureAt(point[0], point[1], state.pressureSystems)));
+            const vmax = Math.round(point[2]);
+            const mslp = point[10] !== undefined && point[10] !== null
+                ? point[10]
+                : Math.round(windToPressure(vmax, point[5] || 300, cycloneInfo.basin, getPressureAt(point[0], point[1], state.pressureSystems)));
             const type = getAtcfTypeCode(vmax, point[4], point[6]);
 
             return [
-                basin.padEnd(2, ' '), cycloneNum.padStart(3, ' '), ` ${dateString}`, ' 00', ' BEST', '   0',
-                lat.padStart(6, ' '), lon.padStart(7, ' '), String(vmax).padStart(4, ' '),
-                String(mslp).padStart(5, ' '), ` ${type}`,
-            ].join(',');
+                basin.padEnd(2, ' '),
+                cycloneNum.padStart(3, ' '),
+                ` ${dateString}`,
+                ' 00',
+                ' BEST',
+                '   0',
+                lat.padStart(6, ' '),
+                lon.padStart(7, ' '),
+                String(vmax).padStart(4, ' '),
+                String(mslp).padStart(5, ' '),
+                ` ${type}`
+            ].join(', ');
         }).join('\n');
     }
 
