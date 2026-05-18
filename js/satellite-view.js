@@ -32,40 +32,33 @@ const fragmentShaderSource = `
     uniform float u_wind_shear_strength;
     uniform float u_random_seed;
     uniform float u_hemisphere;
-
     uniform float u_grayscale;
 
     // asymmetry parameters for sheared/extratropical systems
     uniform float u_asym_strength;
     uniform float u_asym_dir;
 
-    float random(vec2 st) {
-        return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
-    }
 
     float noise(vec2 st) {
         vec2 i = floor(st);
         vec2 f = fract(st);
-        float a = random(i);
-        float b = random(i + vec2(1.0, 0.0));
-        float c = random(i + vec2(0.0, 1.0));
-        float d = random(i + vec2(1.0, 1.0));
         vec2 u = f * f * (3.0 - 2.0 * f);
+
+        float a = fract(sin(dot(i, vec2(12.9898, 78.233))) * 43758.5453123);
+        float b = fract(sin(dot(i + vec2(1.0, 0.0), vec2(12.9898, 78.233))) * 43758.5453123);
+        float c = fract(sin(dot(i + vec2(0.0, 1.0), vec2(12.9898, 78.233))) * 43758.5453123);
+        float d = fract(sin(dot(i + vec2(1.0, 1.0), vec2(12.9898, 78.233))) * 43758.5453123);
+
         return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.y * u.x;
     }
 
-    #define FBM_OCTAVES 5
     float fbm(vec2 st) {
         float value = 0.0;
-        float amplitude = 0.6;
-        float max_amplitude = 0.0;
-        for (int i = 0; i < FBM_OCTAVES; i++) {
-            value += amplitude * noise(st);
-            max_amplitude += amplitude;
-            st *= 2.0;
-            amplitude *= 0.5;
-        }
-        return (value / max_amplitude) * 0.9999;
+        value += 0.600 * noise(st); st *= 2.0;
+        value += 0.300 * noise(st); st *= 2.0;
+        value += 0.150 * noise(st); st *= 2.0;
+        value += 0.075 * noise(st);
+        return value * 0.8888; // value / 1.125 (max amplitude)
     }
 
     // NRL/BD curve style color ramp for IR enhancement
@@ -100,81 +93,59 @@ const fragmentShaderSource = `
         float angle_diff = angle - u_asym_dir;
         float asym_factor = cos(angle_diff);
 
-        float radius_multiplier = 1.0 + asym_factor * u_asym_strength;
-        radius_multiplier = max(0.3, radius_multiplier);
-
+        float radius_multiplier = max(0.3, 1.0 + asym_factor * u_asym_strength);
         float dynamic_storm_radius = u_storm_radius * radius_multiplier;
-
-        float base_distortion_amp = 0.01;
-        float shear_distortion_factor = 0.9;
-        float total_distortion_amplitude = base_distortion_amp + u_wind_shear_strength * shear_distortion_factor;
-
-        float ROTATION_SPEED = 0.3;
-        float NOISE_SCALE = 4.0;
+        float total_distortion_amplitude = 0.01 + u_wind_shear_strength * 0.9;
 
         // spiral cloud bands
-        float spiral_angle = angle + u_spiral_strength * log(dist) * u_hemisphere - u_time * ROTATION_SPEED * u_hemisphere;
+        float spiral_angle = angle + u_spiral_strength * log(dist) * u_hemisphere - u_time * 0.3 * u_hemisphere;
 
         // convective "boiling" effect added to time
-        vec2 noise_uv = vec2(cos(spiral_angle) * dist, sin(spiral_angle) * dist) * NOISE_SCALE;
+        vec2 noise_uv = vec2(cos(spiral_angle) * dist, sin(spiral_angle) * dist) * 4.0;
         noise_uv.y += u_time * 0.15;
         noise_uv.x += fbm(noise_uv + u_time * 0.05) * 0.5; // micro-turbulence
 
         float noise_val = fbm(noise_uv + u_random_seed);
-
         // density asymmetry (thicker clouds on the extended shear side)
-        float density_boost = smoothstep(-0.5, 1.0, asym_factor) * u_asym_strength * 0.2;
-        noise_val += density_boost;
+        noise_val += smoothstep(-0.5, 1.0, asym_factor) * u_asym_strength * 0.2;
 
         // eye and eyewall
         vec2 spiral_boundary_noise_uv = uv * 6.0 + u_time * 0.4;
-        float spiral_boundary_perturbation = fbm(spiral_boundary_noise_uv) * total_distortion_amplitude;
-
-        float spiral_inner_radius = (u_eye_radius - u_wind_shear_strength) + spiral_boundary_perturbation;
+        float spiral_inner_radius = (u_eye_radius - u_wind_shear_strength) + (fbm(spiral_boundary_noise_uv) * total_distortion_amplitude);
 
         // dynamic eye sharpness (so sharper eye for stronger storms where u_eye_radius is positive)
-        float eye_softness = max(0.02, 0.15 - (u_eye_radius * 2.0));
-        float spiral_inner_radius_soft = spiral_inner_radius + eye_softness;
-
-        float eye_falloff = smoothstep(spiral_inner_radius, spiral_inner_radius_soft, dist);
+        float eye_falloff = smoothstep(spiral_inner_radius, spiral_inner_radius + max(0.02, 0.15 - (u_eye_radius * 2.0)), dist);
         noise_val *= eye_falloff;
 
-        float distortion_noise = fbm(uv * 1.5 + u_time * 0.05);
-        float distorted_dist = dist - distortion_noise * u_shape_distortion;
-
-        float storm_falloff = 1.0 - smoothstep(dynamic_storm_radius, dynamic_storm_radius + 0.2, distorted_dist);
+        float storm_falloff = smoothstep(dynamic_storm_radius + 0.2, dynamic_storm_radius, dist - fbm(uv * 1.5 + u_time * 0.05) * u_shape_distortion);
         noise_val *= storm_falloff;
 
         // central dense overcast (CDO)
         float central_mass_value = 0.0;
         if (u_central_mass_size > 0.0) {
-            vec2 shear_direction = normalize(vec2(1.0, 1.0));
-            vec2 cdo_uv = uv - shear_direction * u_wind_shear_strength;
+            vec2 cdo_uv = uv - vec2(0.707106, 0.707106) * u_wind_shear_strength;
             float cdo_dist = length(cdo_uv);
-            float cdo_angle = atan(cdo_uv.y, cdo_uv.x);
-
             float central_mass_outer_radius = u_eye_radius + u_central_mass_size;
-            vec2 boundary_noise_uv = cdo_uv * 6.0 + u_time * 0.3;
-            float boundary_perturbation = fbm(boundary_noise_uv) * total_distortion_amplitude;
 
-            float perturbed_inner_radius = (u_eye_radius - u_wind_shear_strength) + boundary_perturbation;
-            float perturbed_outer_radius = central_mass_outer_radius + boundary_perturbation;
+            if (cdo_dist < central_mass_outer_radius + total_distortion_amplitude + 0.2) {
+                float cdo_angle = atan(cdo_uv.y, cdo_uv.x);
+                float boundary_perturbation = fbm(cdo_uv * 6.0 + u_time * 0.3) * total_distortion_amplitude;
 
-            float central_mass_shape = smoothstep(perturbed_inner_radius, perturbed_inner_radius + 0.06, cdo_dist)
-                                     * (1.0 - smoothstep(perturbed_outer_radius, perturbed_outer_radius + 0.15, cdo_dist));
+                float perturbed_inner_radius = (u_eye_radius - u_wind_shear_strength) + boundary_perturbation;
+                float perturbed_outer_radius = central_mass_outer_radius + boundary_perturbation;
 
-            float central_mass_rotation_speed = ROTATION_SPEED * 1.2;
+                float central_mass_shape = smoothstep(perturbed_inner_radius, perturbed_inner_radius + 0.06, cdo_dist)
+                                         * smoothstep(perturbed_outer_radius + 0.15, perturbed_outer_radius, cdo_dist);
 
-            float central_mass_internal_angle = cdo_angle + u_spiral_strength * log(cdo_dist) * u_hemisphere
-                                              - u_time * central_mass_rotation_speed * u_hemisphere
-                                              - u_wind_shear_strength;
+                float central_mass_internal_angle = cdo_angle + u_spiral_strength * log(cdo_dist) * u_hemisphere - u_time * 0.36 * u_hemisphere - u_wind_shear_strength;
 
-            vec2 central_mass_internal_noise_coords;
-            central_mass_internal_noise_coords.x = cos(central_mass_internal_angle) * cdo_dist - u_wind_shear_strength;
-            central_mass_internal_noise_coords.y = sin(central_mass_internal_angle) * cdo_dist - u_wind_shear_strength;
+                vec2 central_mass_internal_noise_coords = vec2(
+                    cos(central_mass_internal_angle) * cdo_dist - u_wind_shear_strength,
+                    sin(central_mass_internal_angle) * cdo_dist - u_wind_shear_strength
+                );
 
-            float internal_texture = fbm(central_mass_internal_noise_coords * 6.0);
-            central_mass_value = central_mass_shape * (0.85 + internal_texture * 0.15);
+                central_mass_value = central_mass_shape * (0.85 + fbm(central_mass_internal_noise_coords * 6.0) * 0.15);
+            }
         }
 
         noise_val = max(noise_val, central_mass_value);
@@ -183,10 +154,8 @@ const fragmentShaderSource = `
         // output mixing
         vec3 color = nrl_color_ramp(cloud_intensity);
         float ir_val = max(0.1, pow(cloud_intensity * 1.3, 1.2));
-        vec3 grayColor = vec3(ir_val);
-        vec3 final_color = mix(color, grayColor, u_grayscale);
 
-        gl_FragColor = vec4(final_color, 1.0);
+        gl_FragColor = vec4(mix(color, vec3(ir_val), u_grayscale), 1.0);
     }
 `;
 
