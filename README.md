@@ -1,8 +1,8 @@
 # blorf
 
 <p align="center">
-  <a href="https://opapeldetrouxa.neocities.org/">
-    <img src="data/pfm.png" alt="pfm-js logo">
+  <a href="https://strawberrymaster.github.io/blorf/">
+    <img src="favicon/blorf.png" alt="blorf logo" width="150">
   </a>
 </p>
 
