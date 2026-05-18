@@ -234,8 +234,14 @@ function lerp(start, end, t) {
 }
 
 function oscillate(base, amplitude, speed) {
-    return base + Math.sin(Date.now() * 0.001 * speed) * amplitude;
+    return base + Math.sin(performance.now() * 0.001 * speed) * amplitude;
 }
+
+const targetParams = {
+    spiral: 1.0, eye: -0.1, distortion: 0.4, stormRadius: 0.2,
+    centralMass: 0.0, shear: 0.0, cloudLow: 0.1, cloudHigh: 0.8,
+    asymStrength: 0.0, asymDir: 0.0
+};
 
 export function initSatelliteView(canvasId) {
     canvas = document.getElementById(canvasId);
@@ -295,65 +301,64 @@ export function updateSatelliteView(intensityKnots, age, latitude, isExtratropic
     currentParams.hemisphere = latitude < 0 ? -1.0 : 1.0;
 
     // base target parameters
-    let target = {
-        spiral: 1.0, eye: -0.1, distortion: 0.4, stormRadius: 0.2,
-        centralMass: 0.0, shear: 0.0, cloudLow: 0.1, cloudHigh: 0.8,
-        asymStrength: 0.0, asymDir: 0.0
-    };
+    targetParams.spiral = 1.0; targetParams.eye = -0.1; targetParams.distortion = 0.4;
+    targetParams.stormRadius = 0.2; targetParams.centralMass = 0.0; targetParams.shear = 0.0;
+    targetParams.cloudLow = 0.1; targetParams.cloudHigh = 0.8;
+    targetParams.asymStrength = 0.0; targetParams.asymDir = 0.0;
 
     let randomFactor = Math.random();
     let dynamicAsymStr = oscillate(0.25, 0.55, 0.5);
-    let dynamicAsymDir = (Date.now() * 0.0002) % 6.28;
+    let dynamicAsymDir = (performance.now() * 0.0002) % 6.28;
 
     // continuous intensity modifier (scales 0.0 to 1.0 between TS and Cat 5)
-    let powerScale = Math.max(0, Math.min(1, (intensityKnots - 34) / 120));
+    let powerScale = Math.max(0, Math.min(1, (intensityKnots - 34) * 0.008333)); // 1/120
 
     // ============================================================
     // structural morphology (spiral, eye, distortion)
     // ============================================================
     if (isExtratropical) {
         // comma-shape baroclinic leaf structure
-        target.spiral = 0.8; target.eye = -0.2; target.distortion = 0.6; target.stormRadius = 0.4;
-        target.centralMass = 0.0; target.shear = 0.2; target.asymStrength = 1.5; target.asymDir = 5.5;
+        targetParams.spiral = 0.8; targetParams.eye = -0.2; targetParams.distortion = 0.6; targetParams.stormRadius = 0.4;
+        targetParams.centralMass = 0.0; targetParams.shear = 0.2; targetParams.asymStrength = 1.5; targetParams.asymDir = 5.5;
     } else if (isSubtropical) {
         // broad, somewhat asymmetric structure
-        target.spiral = 1.0; target.eye = -0.15; target.distortion = 0.5; target.stormRadius = 0.3;
-        target.centralMass = 0.05; target.shear = 0.15; target.asymStrength = 0.5; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.0; targetParams.eye = -0.15; targetParams.distortion = 0.5; targetParams.stormRadius = 0.3;
+        targetParams.centralMass = 0.05; targetParams.shear = 0.15; targetParams.asymStrength = 0.5; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 24) { // low pressure area
-        target.spiral = 0.5; target.eye = -0.10; target.distortion = Math.random() * 0.3 + 0.1;
-        target.stormRadius = 0.1; target.centralMass = 0.0; target.shear = 0.10;
-        target.asymStrength = dynamicAsymStr * 1.5; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 0.5; targetParams.eye = -0.10; targetParams.distortion = Math.random() * 0.3 + 0.1;
+        targetParams.stormRadius = 0.1; targetParams.centralMass = 0.0; targetParams.shear = 0.10;
+        targetParams.asymStrength = dynamicAsymStr * 1.5; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 34) { // tropical depression
-        target.spiral = 1.0; target.eye = -0.10; target.distortion = 0.4; target.stormRadius = 0.15;
-        target.centralMass = 0.0; target.shear = 0.10; target.asymStrength = dynamicAsymStr * 1.4; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.0; targetParams.eye = -0.10; targetParams.distortion = 0.4; targetParams.stormRadius = 0.15;
+        targetParams.centralMass = 0.0; targetParams.shear = 0.10; targetParams.asymStrength = dynamicAsymStr * 1.4; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 64) { // tropical storm
-        target.spiral = 1.2 + (powerScale * 0.2);
-        target.eye = -0.06; target.distortion = 0.35; target.stormRadius = 0.25;
-        target.centralMass = randomFactor * 0.30; target.shear = randomFactor * 0.20;
-        target.asymStrength = dynamicAsymStr * 1.3; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.2 + (powerScale * 0.2);
+        targetParams.eye = -0.06; targetParams.distortion = 0.35; targetParams.stormRadius = 0.25;
+        targetParams.centralMass = randomFactor * 0.30; targetParams.shear = randomFactor * 0.20;
+        targetParams.asymStrength = dynamicAsymStr * 1.3; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 83) { // Cat 1
-        target.spiral = 1.4; target.eye = oscillate(0.0, 0.025, 1.0); target.distortion = 0.30;
-        target.stormRadius = 0.2; target.centralMass = currentParams.seed > 50 ? 0.15 : -0.05;
-        target.shear = currentParams.seed > 50 ? 0.08 : 0.0;
-        target.asymStrength = dynamicAsymStr * 1.2; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.4; targetParams.eye = oscillate(0.0, 0.025, 1.0); targetParams.distortion = 0.30;
+        targetParams.stormRadius = 0.2; targetParams.centralMass = currentParams.seed > 50 ? 0.15 : -0.05;
+        targetParams.shear = currentParams.seed > 50 ? 0.08 : 0.0;
+        targetParams.asymStrength = dynamicAsymStr * 1.2; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 96) { // Cat 2
-        target.spiral = 1.6; target.eye = oscillate(0.01, 0.025, 1.5); target.distortion = 0.35;
-        target.stormRadius = 0.22; target.centralMass = 0.12; target.shear = 0.04;
-        target.asymStrength = dynamicAsymStr * 1.1; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.6; targetParams.eye = oscillate(0.01, 0.025, 1.5); targetParams.distortion = 0.35;
+        targetParams.stormRadius = 0.22; targetParams.centralMass = 0.12; targetParams.shear = 0.04;
+        targetParams.asymStrength = dynamicAsymStr * 1.1; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 113) { // Cat 3
-        target.spiral = 1.9; target.eye = oscillate(0.02, 0.025, 2.0); target.distortion = Math.random() * 0.05 + 0.27;
-        target.stormRadius = Math.random() * 0.05 + 0.27; target.centralMass = 0.10; target.shear = 0.03;
-        target.asymStrength = dynamicAsymStr * 1.0; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 1.9; targetParams.eye = oscillate(0.02, 0.025, 2.0); targetParams.distortion = Math.random() * 0.05 + 0.27;
+        targetParams.stormRadius = Math.random() * 0.05 + 0.27; targetParams.centralMass = 0.10; targetParams.shear = 0.03;
+        targetParams.asymStrength = dynamicAsymStr * 1.0; targetParams.asymDir = dynamicAsymDir;
     } else if (intensityKnots < 137) { // Cat 4
         // eye begins to clear out and stabilize
-        target.spiral = 2.0 + (powerScale * 0.2); target.eye = oscillate(0.03, 0.02, 2.5); target.distortion = Math.random() * 0.30;
-        target.stormRadius = 0.25; target.centralMass = 0.08; target.shear = 0.02;
-        target.asymStrength = dynamicAsymStr * 0.8; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 2.0 + (powerScale * 0.2); targetParams.eye = oscillate(0.03, 0.02, 2.5); targetParams.distortion = Math.random() * 0.30;
+        targetParams.stormRadius = 0.25; targetParams.centralMass = 0.08; targetParams.shear = 0.02;
+        targetParams.asymStrength = dynamicAsymStr * 0.8; targetParams.asymDir = dynamicAsymDir;
     } else { // Cat 5
         // pin-hole eye, highly symmetric, deep convection
-        target.spiral = 2.5; target.eye = oscillate(0.04, 0.015, 3.0); target.distortion = Math.random() * 0.20;
-        target.stormRadius = 0.20; target.centralMass = Math.random() * 0.05 + 0.05; target.shear = 0.00;
-        target.asymStrength = dynamicAsymStr * 0.5; target.asymDir = dynamicAsymDir;
+        targetParams.spiral = 2.5; targetParams.eye = oscillate(0.04, 0.015, 3.0); targetParams.distortion = Math.random() * 0.20;
+        targetParams.stormRadius = 0.20; targetParams.centralMass = Math.random() * 0.05 + 0.05; targetParams.shear = 0.00;
+        targetParams.asymStrength = dynamicAsymStr * 0.5; targetParams.asymDir = dynamicAsymDir;
     }
 
     // ============================================================
@@ -363,29 +368,29 @@ export function updateSatelliteView(intensityKnots, age, latitude, isExtratropic
     const isMatureTropical = !isExtratropical && !isSubtropical && intensityKnots >= 34;
 
     if (!isMatureTropical) {
-        // weaker or transitioning systems are looser and more diffuse
-        if (isExtratropical) target.cloudHigh = 2.0;
-        else if (isSubtropical) target.cloudHigh = 1.6;
-        else if (intensityKnots < 24) target.cloudHigh = 1.3;
-        else target.cloudHigh = 1.1;
 
-        if (humidity < 60) target.cloudHigh += 0.2; // dry air thins clouds
+        // weaker or transitioning systems are looser and more diffuse
+        if (isExtratropical) targetParams.cloudHigh = 2.0;
+        else if (isSubtropical) targetParams.cloudHigh = 1.6;
+        else if (intensityKnots < 24) targetParams.cloudHigh = 1.3;
+        else targetParams.cloudHigh = 1.1;
+
+        if (humidity < 60) targetParams.cloudHigh += 0.2; // dry air thins clouds
     } else {
         // mature tropical systems map cloud density strictly to environmental moisture
         // 95% Hum -> CloudHigh 0.45 (thick, white CDO)
         // 40% Hum -> CloudHigh 1.35 (thin, dissipating)
         const effectiveHum = Math.max(30, Math.min(98, humidity));
-        target.cloudHigh = 2.1 - (effectiveHum * 0.015);
+        targetParams.cloudHigh = 2.1 - (effectiveHum * 0.015);
     }
 
     // environmental jitter and adjustments
     let jitter = (Math.random() - 0.5) * 0.02;
-    target.stormRadius += jitter;
-    target.distortion += jitter * 2.0;
+    targetParams.stormRadius += jitter;
+    targetParams.distortion += jitter * 2.0;
 
-    let sstThreshold = 27.0;
-    let sstEffect = Math.max(0, (sstThreshold - sst) * 0.3); // Colder water thins clouds
-    target.cloudHigh += sstEffect;
+    let sstEffect = Math.max(0, (27.0 - sst) * 0.3); // colder water thins clouds
+    targetParams.cloudHigh += sstEffect;
 
     const smoothFactor = 0.25;
 
@@ -395,23 +400,26 @@ export function updateSatelliteView(intensityKnots, age, latitude, isExtratropic
         currentParams.centralMass -= 0.04;
         if (currentParams.cloudHigh > 2.0) currentParams.cloudHigh = 2.0;
 
-        target.eye = -0.15; // eye fills with clouds
-        target.spiral *= 0.8;
+        targetParams.eye = -0.15; // eye fills with clouds
+        targetParams.spiral *= 0.8;
     } else {
-        currentParams.cloudHigh = lerp(currentParams.cloudHigh, target.cloudHigh, smoothFactor);
+        currentParams.cloudHigh = lerp(currentParams.cloudHigh, targetParams.cloudHigh, smoothFactor);
     }
 
     // apply linear interpolation for smooth visual transitions
-    currentParams.spiral = lerp(currentParams.spiral, target.spiral, smoothFactor);
-    currentParams.eye = lerp(currentParams.eye, target.eye, smoothFactor);
-    currentParams.distortion = lerp(currentParams.distortion, target.distortion, smoothFactor);
-    currentParams.stormRadius = lerp(currentParams.stormRadius, target.stormRadius, smoothFactor);
-    currentParams.centralMass = lerp(currentParams.centralMass, target.centralMass, smoothFactor);
-    currentParams.shear = lerp(currentParams.shear, target.shear, smoothFactor);
-    currentParams.cloudLow = lerp(currentParams.cloudLow, target.cloudLow, smoothFactor);
-    currentParams.asymStrength = lerp(currentParams.asymStrength, target.asymStrength, smoothFactor);
-    currentParams.asymDir = lerp(currentParams.asymDir, target.asymDir, smoothFactor * 0.5);
+
+    currentParams.spiral = lerp(currentParams.spiral, targetParams.spiral, smoothFactor);
+    currentParams.eye = lerp(currentParams.eye, targetParams.eye, smoothFactor);
+    currentParams.distortion = lerp(currentParams.distortion, targetParams.distortion, smoothFactor);
+    currentParams.stormRadius = lerp(currentParams.stormRadius, targetParams.stormRadius, smoothFactor);
+    currentParams.centralMass = lerp(currentParams.centralMass, targetParams.centralMass, smoothFactor);
+    currentParams.shear = lerp(currentParams.shear, targetParams.shear, smoothFactor);
+    currentParams.cloudLow = lerp(currentParams.cloudLow, targetParams.cloudLow, smoothFactor);
+    currentParams.asymStrength = lerp(currentParams.asymStrength, targetParams.asymStrength, smoothFactor);
+    currentParams.asymDir = lerp(currentParams.asymDir, targetParams.asymDir, smoothFactor * 0.5);
 }
+
+const glCache = {};
 
 function render() {
     if (!gl || !program) return;
@@ -421,8 +429,7 @@ function render() {
         return;
     }
 
-    const time = (Date.now() - startTime) * 0.001;
-
+    const time = performance.now() * 0.001;
     const displayWidth = canvas.clientWidth;
     const displayHeight = canvas.clientHeight;
 
@@ -434,21 +441,32 @@ function render() {
 
     gl.useProgram(program);
 
-    gl.uniform2f(uniforms.u_resolution, canvas.width, canvas.height);
+    if (glCache.width !== canvas.width || glCache.height !== canvas.height) {
+        gl.uniform2f(uniforms.u_resolution, canvas.width, canvas.height);
+        glCache.width = canvas.width;
+        glCache.height = canvas.height;
+    }
+
     gl.uniform1f(uniforms.u_time, time);
-    gl.uniform1f(uniforms.u_spiral_strength, currentParams.spiral);
-    gl.uniform1f(uniforms.u_eye_radius, currentParams.eye);
-    gl.uniform1f(uniforms.u_shape_distortion, currentParams.distortion);
-    gl.uniform1f(uniforms.u_storm_radius, currentParams.stormRadius);
-    gl.uniform1f(uniforms.u_central_mass_size, currentParams.centralMass);
-    gl.uniform1f(uniforms.u_wind_shear_strength, currentParams.shear);
-    gl.uniform1f(uniforms.u_cloud_low, currentParams.cloudLow);
-    gl.uniform1f(uniforms.u_cloud_high, currentParams.cloudHigh);
-    gl.uniform1f(uniforms.u_random_seed, currentParams.seed);
-    gl.uniform1f(uniforms.u_hemisphere, currentParams.hemisphere);
-    gl.uniform1f(uniforms.u_asym_strength, currentParams.asymStrength);
-    gl.uniform1f(uniforms.u_asym_dir, currentParams.asymDir);
-    gl.uniform1f(uniforms.u_grayscale, isGrayscale ? 1.0 : 0.0);
+
+    const p = currentParams;
+
+    // only update GPU if parameters actually changed since the last frame
+    if (glCache.spiral !== p.spiral) { gl.uniform1f(uniforms.u_spiral_strength, p.spiral); glCache.spiral = p.spiral; }
+    if (glCache.eye !== p.eye) { gl.uniform1f(uniforms.u_eye_radius, p.eye); glCache.eye = p.eye; }
+    if (glCache.distortion !== p.distortion) { gl.uniform1f(uniforms.u_shape_distortion, p.distortion); glCache.distortion = p.distortion; }
+    if (glCache.stormRadius !== p.stormRadius) { gl.uniform1f(uniforms.u_storm_radius, p.stormRadius); glCache.stormRadius = p.stormRadius; }
+    if (glCache.centralMass !== p.centralMass) { gl.uniform1f(uniforms.u_central_mass_size, p.centralMass); glCache.centralMass = p.centralMass; }
+    if (glCache.shear !== p.shear) { gl.uniform1f(uniforms.u_wind_shear_strength, p.shear); glCache.shear = p.shear; }
+    if (glCache.cloudLow !== p.cloudLow) { gl.uniform1f(uniforms.u_cloud_low, p.cloudLow); glCache.cloudLow = p.cloudLow; }
+    if (glCache.cloudHigh !== p.cloudHigh) { gl.uniform1f(uniforms.u_cloud_high, p.cloudHigh); glCache.cloudHigh = p.cloudHigh; }
+    if (glCache.seed !== p.seed) { gl.uniform1f(uniforms.u_random_seed, p.seed); glCache.seed = p.seed; }
+    if (glCache.hemisphere !== p.hemisphere) { gl.uniform1f(uniforms.u_hemisphere, p.hemisphere); glCache.hemisphere = p.hemisphere; }
+    if (glCache.asymStrength !== p.asymStrength) { gl.uniform1f(uniforms.u_asym_strength, p.asymStrength); glCache.asymStrength = p.asymStrength; }
+    if (glCache.asymDir !== p.asymDir) { gl.uniform1f(uniforms.u_asym_dir, p.asymDir); glCache.asymDir = p.asymDir; }
+
+    const grayVal = isGrayscale ? 1.0 : 0.0;
+    if (glCache.grayscale !== grayVal) { gl.uniform1f(uniforms.u_grayscale, grayVal); glCache.grayscale = grayVal; }
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(render);

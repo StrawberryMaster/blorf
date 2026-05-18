@@ -11,9 +11,24 @@ const RAD_TO_DEG = 180 / Math.PI;
 const DISTANCE_FACTOR_3HR = 0.049911; // 3 hours * 1.852 km/h / 111.32 km/deg
 
 function clonePressureSystems(sys) {
+    const cloneLayer = (layer) => {
+        if (!layer) return [];
+        const len = layer.length;
+        const out = new Array(len);
+        for (let i = 0; i < len; i++) {
+            const s = layer[i];
+            out[i] = {
+                type: s.type, x: s.x, y: s.y, baseSigmaX: s.baseSigmaX, sigmaX: s.sigmaX, sigmaY: s.sigmaY,
+                strength: s.strength, baseStrength: s.baseStrength, velocityX: s.velocityX, velocityY: s.velocityY,
+                oscillationPhase: s.oscillationPhase, oscillationSpeed: s.oscillationSpeed, oscillationAmount: s.oscillationAmount,
+                isColdSurge: s.isColdSurge, isManual: s.isManual
+            };
+        }
+        return out;
+    };
     return {
-        upper: sys.upper ? sys.upper.map(s => ({ ...s })) : [],
-        lower: sys.lower ? sys.lower.map(s => ({ ...s })) : []
+        upper: cloneLayer(sys.upper),
+        lower: cloneLayer(sys.lower)
     };
 }
 
