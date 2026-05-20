@@ -13,6 +13,22 @@ import { generatePathForecasts } from './forecast-models.js';
 import { drawMap, drawFinalPath, drawHistoricalIntensityChart, drawHumidityField, calculateBackgroundHumidity, calculateTotalHumidity, drawAllHistoryTracks, renderJTWCStyle, renderProbabilitiesStyle, drawStationGraph, renderPhaseSpace, startNewsAnimation, renderStationSynopticChart } from './visualization.js';
 import { playClick, playToggleOn, playToggleOff, playStart, playError, playAlert, playUpgradeSound, playCat5Sound, toggleSFX } from './audio.js';
 
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+
+let lastSiteLatForTide = null;
+let cachedLatFactor = 1.0;
+
+const lastRadarState = {
+    age: -1,
+    siteLon: null,
+    siteLat: null,
+    cx: -1,
+    cy: -1,
+    radiusPx: -1,
+    mode: null
+};
+
 const checkLandWrapper = (lon, lat) => {
     const status = getLandStatus(lon, lat);
     return status.isLand;
@@ -181,6 +197,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     radarOverlayCtx.clearRect(0, 0, radarOverlayCanvas.width, radarOverlayCanvas.height);
                 }
             }
+            // reset radar rendering caches
+            lastRadarState.mode = null;
             radarScopeVisible = false;
         }
         requestAnimationFrame(animate);
@@ -413,7 +431,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.cyclone && state.cyclone.track && state.cyclone.track.length > 0) {
             state.cyclone.track.forEach(p => {
                 if (p[2] > peakWind) peakWind = p[2];
-                let p_val = p[10] !== undefined ? p[10] : windToPressure(p[2], p[5] || 300, currentBasin, getPressureAt(p[0], p[1], state.pressureSystems));
+                const p_val = p[10] !== undefined ? p[10] : windToPressure(p[2], p[5] || 300, currentBasin, getPressureAt(p[0], p[1], state.pressureSystems));
                 if (p_val < minPressure) minPressure = p_val;
             });
         }
@@ -615,9 +633,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (!radarRenderer || !dopplerRenderer) return;
 
-        radarCanvas.classList.remove('hidden');
-        radarOverlayCanvas.classList.remove('hidden');
-
         const { width, height } = mapContainer.node().getBoundingClientRect();
         if (radarOverlayCanvas.width !== width || radarOverlayCanvas.height !== height) {
             radarOverlayCanvas.width = width;
@@ -632,11 +647,39 @@ document.addEventListener('DOMContentLoaded', () => {
         const radiusPx = Math.abs(refPoint[0] - cx);
 
         // WebGL renderer positioning
+        const mode = state.dopplerMode ? 'doppler' : 'radar';
+        const age = state.cyclone ? state.cyclone.age : 0;
+
+        // only proceed if tracking or map state changed
+        const isDirty = lastRadarState.age !== age ||
+                        lastRadarState.siteLon !== state.siteLon ||
+                        lastRadarState.siteLat !== state.siteLat ||
+                        lastRadarState.cx !== cx ||
+                        lastRadarState.cy !== cy ||
+                        lastRadarState.radiusPx !== radiusPx ||
+                        lastRadarState.mode !== mode;
+
+        if (!isDirty) return;
+
+        lastRadarState.age = age;
+        lastRadarState.siteLon = state.siteLon;
+        lastRadarState.siteLat = state.siteLat;
+        lastRadarState.cx = cx;
+        lastRadarState.cy = cy;
+        lastRadarState.radiusPx = radiusPx;
+        lastRadarState.mode = mode;
+
+        radarCanvas.classList.remove('hidden');
+        radarOverlayCanvas.classList.remove('hidden');
+
+        // render scale properties only on dimensional changes
         const size = radiusPx * 2;
-        radarCanvas.style.width = `${size}px`;
-        radarCanvas.style.height = `${size}px`;
-        radarCanvas.style.left = `${cx - radiusPx}px`;
-        radarCanvas.style.top = `${cy - radiusPx}px`;
+        if (parseFloat(radarCanvas.style.width) !== size) {
+            radarCanvas.style.width = `${size}px`;
+            radarCanvas.style.height = `${size}px`;
+            radarCanvas.style.left = `${cx - radiusPx}px`;
+            radarCanvas.style.top = `${cy - radiusPx}px`;
+        }
 
         if (state.dopplerMode) {
             dopplerRenderer.render(state, 256, 256);
@@ -682,8 +725,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const h = String(currentDate.getUTCHours()).padStart(2, '0');
         const dateStr = `${m}/${d} ${h}Z`;
 
-        let themeColor = type === 'RED' ? '#dc2626' : type === 'PURPLE' ? '#a855f7' : '#ea580c';
-        let borderColor = type === 'RED' ? 'border-[#dc2626]' : type === 'PURPLE' ? 'border-[#a855f7]' : 'border-[#ea580c]';
+        const themeColor = type === 'RED' ? '#dc2626' : type === 'PURPLE' ? '#a855f7' : '#ea580c';
+        const borderColor = type === 'RED' ? 'border-[#dc2626]' : type === 'PURPLE' ? 'border-[#a855f7]' : 'border-[#ea580c]';
 
         const newsItem = document.createElement('div');
         newsItem.className = `transform translate-x-full transition-transform duration-500 ease-out flex flex-col items-end font-mono shadow-2xl pointer-events-auto`;
@@ -757,7 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             let peakWindSoFar = 0;
             if (state.cyclone.track) {
-                for (let i=0; i<state.cyclone.track.length; i++) {
+                for (let i = 0; i < state.cyclone.track.length; i++) {
                     if (state.cyclone.track[i][2] > peakWindSoFar) peakWindSoFar = state.cyclone.track[i][2];
                 }
             }
@@ -782,10 +825,10 @@ document.addEventListener('DOMContentLoaded', () => {
             let effectiveHumidity = 75;
             if (state.cyclone && state.pressureSystems) {
                 const samplingRadiusDeg = state.cyclone.circulationSize * 0.005;
-                const cosLat = 1.0 / Math.max(0.1, Math.cos(state.cyclone.lat * Math.PI / 180));
+                const cosLat = 1.0 / Math.max(0.1, Math.cos(state.cyclone.lat * DEG_TO_RAD));
                 let envHumiditySum = 0;
                 let minEnvHumidity = 60;
-                const samplePoints = 8; // Reduced iterations, mathematically identical average
+                const samplePoints = 8;
 
                 for (let i = 0; i < samplePoints; i++) {
                     const angleRad = (i / samplePoints) * 2 * Math.PI;
@@ -864,7 +907,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
 
                     const speedKt = Math.round(vec.magnitude + Math.random());
-                    const flowAngleMath = Math.atan2(-vec.v, vec.u) * (180 / Math.PI);
+                    const flowAngleMath = Math.atan2(-vec.v, vec.u) * RAD_TO_DEG;
                     let windDir = (flowAngleMath + 250) % 360;
                     if (windDir < 0) windDir += 360;
                     const dirText = directionToCompass(windDir);
@@ -887,8 +930,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     const currentSimHour = (state.cyclone && state.cyclone.age) ? state.cyclone.age : 0;
                     const localHour = (currentSimHour + state.siteLon / 15) % 24;
-                    const latFactor = Math.max(0, Math.cos(state.siteLat * Math.PI / 180));
-                    const tideAmplitude = 1.6 * latFactor;
+
+                    if (state.siteLat !== lastSiteLatForTide) {
+                        lastSiteLatForTide = state.siteLat;
+                        cachedLatFactor = Math.max(0, Math.cos(state.siteLat * DEG_TO_RAD));
+                    }
+                    const tideAmplitude = 1.6 * cachedLatFactor;
                     const diurnalBias = tideAmplitude * Math.cos(((localHour - 10) / 12) * 2 * Math.PI);
                     const microNoise = (Math.random() - 0.5) * 0.2;
                     const Pn = getPressureAt(state.siteLon, state.siteLat, state.pressureSystems);
@@ -937,7 +984,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let peakWind = 0, minPressure = 9999;
                 state.cyclone.track.forEach(point => {
                     if (point[2] > peakWind) peakWind = point[2];
-                    let pressure = point[10] !== undefined && point[10] !== null ? point[10] : Math.round(windToPressure(point[2], point[5] || 300, basinId));
+                    const pressure = point[10] !== undefined && point[10] !== null ? point[10] : Math.round(windToPressure(point[2], point[5] || 300, basinId));
                     if (pressure < minPressure) minPressure = pressure;
                 });
 
@@ -970,7 +1017,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const finalStats = { number: `${basinCode} ${cycloneNumStr}`, peakWind: Math.round(peakWind), minPressure: Math.round(minPressure), ace: state.cyclone.ace.toFixed(2) };
                 state.lastFinalStats = finalStats;
 
-                drawFinalPath(mapSvg, mapProjection, state.cyclone, state.world, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, finalStats, basinId, state.pressureSystems, state.showWindField);
+                drawFinalPath(mapSvg, mapProjection, state.world, state.cyclone, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, finalStats, basinId, state.pressureSystems, state.showWindField);
                 requestRedraw();
 
                 if (state.showIntensityChart) forecastContainer.classList.remove('hidden');
@@ -1230,7 +1277,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const siteDataToPass = state.currentSiteData ? { ...state.currentSiteData, label: null } : null;
                 drawFinalPath(
-                    mapSvg, mapProjection, state.cyclone, state.world, tooltip,
+                    mapSvg, mapProjection, state.world, state.cyclone, tooltip,
                     state.siteName, state.siteLon, state.siteLat,
                     state.showPathPoints, state.lastFinalStats, basinSelector.value,
                     state.pressureSystems, state.showWindField,
@@ -1386,7 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('simulation-output').classList.remove('hidden');
             bestTrackContainer.classList.add('hidden');
 
-            drawFinalPath(mapSvg, mapProjection, selectedCyclone, state.world, tooltip, null, null, null, state.showPathPoints, null, basinSelector.value);
+            drawFinalPath(mapSvg, mapProjection, state.world, selectedCyclone, tooltip, null, null, null, state.showPathPoints, null, basinSelector.value);
             if (state.showIntensityChart) forecastContainer.classList.remove('hidden');
             drawHistoricalIntensityChart(chartContainer, selectedCyclone.track, tooltip);
 
@@ -1404,7 +1451,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('longitude').textContent = `${peak.lon.toFixed(1)}°E`;
             document.getElementById('intensity').textContent = `${knotsToKph(peak.intensity)} kph (${knotsToMph(peak.intensity)} mph)`;
 
-            let displayP = peak.pressure !== undefined && peak.pressure !== null ? peak.pressure : Math.round(windToPressure(peak.intensity, peak.circulationSize, selectedCyclone.basin || state.cyclone.basin || 'WPAC'));
+            const displayP = peak.pressure !== undefined && peak.pressure !== null ? peak.pressure : Math.round(windToPressure(peak.intensity, peak.circulationSize, selectedCyclone.basin || state.cyclone.basin || 'WPAC'));
             document.getElementById('pressure').textContent = `${displayP} hPa`;
             document.getElementById('category').textContent = peakCat.name;
             document.getElementById('ace').textContent = selectedCyclone.ace.toFixed(2);
@@ -1456,7 +1503,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (state.cyclone.status === 'active') {
                  requestRedraw();
             } else {
-                 drawFinalPath(mapSvg, mapProjection, state.cyclone, state.world, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, state.lastFinalStats, basinSelector.value, state.pressureSystems, state.showWindField);
+                 drawFinalPath(mapSvg, mapProjection, state.world, state.cyclone, tooltip, state.siteName, state.siteLon, state.siteLat, state.showPathPoints, state.lastFinalStats, basinSelector.value, state.pressureSystems, state.showWindField);
             }
         });
     }
@@ -1762,7 +1809,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const trackData = targetCyclone.track.find((_, i) => i * 3 === bestShot.age) || targetPoint;
                 const intensity = trackData ? trackData[2] : 0;
-                let nameDisplay = targetCyclone.name ? targetCyclone.name.toUpperCase() : `TD ${String(state.simulationCount).padStart(2, '0')}`;
+                const nameDisplay = targetCyclone.name ? targetCyclone.name.toUpperCase() : `TD ${String(state.simulationCount).padStart(2, '0')}`;
 
                 infoOverlay.innerHTML = `
                     <div class="font-bold text-lg text-cyan-400">SATELLITE SNAPSHOT OF ${nameDisplay}</div>
@@ -1793,7 +1840,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const targetHour = renderIndex * 3;
             const isHistoryMode = !!state.selectedHistoryCyclone;
 
-            let sourceSiteList = isHistoryMode ? (state.selectedHistoryCyclone.siteHistory || []) : state.siteHistory;
+            const sourceSiteList = isHistoryMode ? (state.selectedHistoryCyclone.siteHistory || []) : state.siteHistory;
             const record = sourceSiteList.find(h => h.hour === targetHour);
             const sLon = record ? record.lon : state.siteLon;
             const sLat = record ? record.lat : state.siteLat;
@@ -1864,7 +1911,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const localWindKt = Math.round(record.wind);
             const localPressure = Math.round(record.pressure);
 
-            const flowAngleMath = Math.atan2(-record.v, record.u) * (180 / Math.PI);
+            const flowAngleMath = Math.atan2(-record.v, record.u) * RAD_TO_DEG;
             let windFromDir = (flowAngleMath + 270) % 360;
             if (windFromDir < 0) windFromDir += 360;
             const localWindDirStr = directionToCompass(windFromDir);
@@ -1881,9 +1928,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const siteLonFixed = record.lon || state.siteLon;
 
             const distKm = calculateDistance(p[1], p[0], siteLatFixed, siteLonFixed);
-            const bearing = (Math.atan2(p[0] - siteLonFixed, p[1] - siteLatFixed) * 180 / Math.PI + 360) % 360;
             const bearingRad = Math.atan2(p[0] - siteLonFixed, p[1] - siteLatFixed);
-            let bearingDeg = (bearingRad * 180 / Math.PI);
+            let bearingDeg = (bearingRad * RAD_TO_DEG);
             if (bearingDeg < 0) bearingDeg += 360;
             const bearingStr = directionToCompass(bearingDeg);
 
@@ -2002,7 +2048,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const w = Math.round(h.wind);
                     const p = Math.round(h.pressure);
 
-                    const angleMath = Math.atan2(-h.v, h.u) * (180 / Math.PI);
+                    const angleMath = Math.atan2(-h.v, h.u) * RAD_TO_DEG;
                     let dirDeg = (angleMath + 270) % 360;
                     if (dirDeg < 0) dirDeg += 360;
                     const dirStr = directionToCompass(dirDeg);

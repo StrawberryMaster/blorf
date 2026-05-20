@@ -12,6 +12,7 @@ const inv360 = 1 / 360;
 const inv180 = 1 / 180;
 
 const MAX_ELEVATION_METERS = 680;
+const ELEVATION_SCALE = MAX_ELEVATION_METERS / 255;
 
 export function initTerrainSystem(imageUrl, worldData) {
     return new Promise((resolve, reject) => {
@@ -27,7 +28,7 @@ export function initTerrainSystem(imageUrl, worldData) {
             canvas.width = mapWidth;
             canvas.height = mapHeight;
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            
+
             // process elevation data
             ctx.drawImage(img, 0, 0);
             const elevRaw = ctx.getImageData(0, 0, mapWidth, mapHeight).data;
@@ -38,7 +39,7 @@ export function initTerrainSystem(imageUrl, worldData) {
             for (let i = 0, j = 0; i < totalPixels; i++, j += 4) {
                 elevationData[i] = elevRaw[j];
             }
-            
+
             // generate land mask
             if (worldData) {
                 const projection = d3.geoEquirectangular()
@@ -75,22 +76,6 @@ export function initTerrainSystem(imageUrl, worldData) {
     });
 }
 
-// inlineable pixel coordinate calculator
-function getPixelCoords(lon, lat) {
-    // normalize longitude to [-180, 180]
-    const normLon = ((lon + 180) % 360 + 360) % 360 - 180;
-
-    // bitwise truncation
-    let x = ~~(((normLon + 180) * inv360) * mapWidth);
-    let y = ~~(((90 - lat) * inv180) * mapHeight);
-
-    // boundary clamp
-    if (x < 0) x = 0; else if (x >= mapWidth) x = mapWidth - 1;
-    if (y < 0) y = 0; else if (y >= mapHeight) y = mapHeight - 1;
-
-    return { x, y };
-}
-
 const STATUS_WATER = { isLand: false, isNearLand: false };
 const STATUS_NEAR  = { isLand: false, isNearLand: true };
 const STATUS_LAND  = { isLand: true, isNearLand: true };
@@ -105,14 +90,14 @@ export function getElevationAt(lon, lat) {
     let x = ~~(((normLon + 180) * inv360) * mapWidth);
     let y = ~~(((90 - lat) * inv180) * mapHeight);
 
-    if (x < 0) x = 0; else if (x >= mapWidth) x = mapWidth - 1;
-    if (y < 0) y = 0; else if (y >= mapHeight) y = mapHeight - 1;
+    x = (x < 0) ? 0 : (x >= mapWidth ? mapWidth - 1 : x);
+    y = (y < 0) ? 0 : (y >= mapHeight ? mapHeight - 1 : y);
 
     const brightness = elevationData[y * mapWidth + x];
 
     // skip tiny values to reduce math overhead for flat oceans
     if (brightness < 5) return 0;
-    return (brightness / 255) * MAX_ELEVATION_METERS;
+    return brightness * ELEVATION_SCALE;
 }
 
 export function getLandStatus(lon, lat, nearThresholdDeg = 0.2) {
@@ -126,8 +111,8 @@ export function getLandStatus(lon, lat, nearThresholdDeg = 0.2) {
     let cx = ~~(((normLon + 180) * inv360) * mapWidth);
     let cy = ~~(((90 - lat) * inv180) * mapHeight);
 
-    if (cx < 0) cx = 0; else if (cx >= mapWidth) cx = mapWidth - 1;
-    if (cy < 0) cy = 0; else if (cy >= mapHeight) cy = mapHeight - 1;
+    cx = (cx < 0) ? 0 : (cx >= mapWidth ? mapWidth - 1 : cx);
+    cy = (cy < 0) ? 0 : (cy >= mapHeight ? mapHeight - 1 : cy);
 
     const centerIdx = cy * mapWidth + cx;
 
@@ -138,20 +123,28 @@ export function getLandStatus(lon, lat, nearThresholdDeg = 0.2) {
     const startY = Math.max(0, cy - radius);
     const endY = Math.min(mapHeight - 1, cy + radius);
 
-    // scan neighborhood
-    for (let y = startY; y <= endY; y++) {
-        const rowOffset = y * mapWidth;
+    // if bounds do not wrap, execute a branch-prediction-friendly path
+    if (cx - radius >= 0 && cx + radius < mapWidth) {
+        for (let y = startY; y <= endY; y++) {
+            const rowOffset = y * mapWidth + cx;
+            for (let dx = -radius; dx <= radius; dx++) {
+                if (landMaskData[rowOffset + dx] > 128) {
+                    return STATUS_NEAR;
+                }
+            }
+        }
+    } else {
+        // fallback for edge-wrap coordinates
+        for (let y = startY; y <= endY; y++) {
+            const rowOffset = y * mapWidth;
+            for (let dx = -radius; dx <= radius; dx++) {
+                let nx = cx + dx;
+                if (nx < 0) nx += mapWidth;
+                else if (nx >= mapWidth) nx -= mapWidth;
 
-        for (let dx = -radius; dx <= radius; dx++) {
-            let nx = cx + dx;
-            
-            // horizontal map wrapping
-            if (nx < 0) nx += mapWidth;
-            else if (nx >= mapWidth) nx -= mapWidth;
-
-            // 1D index check
-            if (landMaskData[rowOffset + nx] > 128) {
-                return STATUS_NEAR;
+                if (landMaskData[rowOffset + nx] > 128) {
+                    return STATUS_NEAR;
+                }
             }
         }
     }

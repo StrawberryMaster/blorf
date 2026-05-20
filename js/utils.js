@@ -65,14 +65,18 @@ const NOISE_CONFIG = {
     detailAmp: 0.5
 };
 
+const INV_BASE_SCALE = 1 / NOISE_CONFIG.baseScale;
+const INV_DETAIL_SCALE = 1 / NOISE_CONFIG.detailScale;
+const PRESSURE_COEFF = 12.5 / 512.63;
+
 function pseudoNoise(x, y, seed) {
     const n = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
     return n - Math.floor(n);
 }
 
-function getSmoothNoise(lon, lat, scale, seed) {
-    const x = lon / scale;
-    const y = lat / scale;
+function getSmoothNoise(lon, lat, invScale, seed) {
+    const x = lon * invScale;
+    const y = lat * invScale;
 
     const i = Math.floor(x);
     const j = Math.floor(y);
@@ -96,8 +100,8 @@ function getSmoothNoise(lon, lat, scale, seed) {
 }
 
 export function calculateAtmosphericNoise(lon, lat) {
-    const base = (getSmoothNoise(lon, lat, NOISE_CONFIG.baseScale, NOISE_CONFIG.seed) - 0.5) * 2;
-    const detail = (getSmoothNoise(lon, lat, NOISE_CONFIG.detailScale, NOISE_CONFIG.seed + 100) - 0.5) * 8;
+    const base = (getSmoothNoise(lon, lat, INV_BASE_SCALE, NOISE_CONFIG.seed) - 0.5) * 2;
+    const detail = (getSmoothNoise(lon, lat, INV_DETAIL_SCALE, NOISE_CONFIG.seed + 100) - 0.5) * 8;
     return (base * NOISE_CONFIG.baseAmp) + (detail * NOISE_CONFIG.detailAmp);
 }
 
@@ -118,17 +122,20 @@ export function calculateDistance(lat1, lon1, lat2, lon2) {
     const R = 6371; // Earth radius in km
     const dLat = (lat2 - lat1) * DEG_TO_RAD;
     const dLon = (lon2 - lon1) * DEG_TO_RAD;
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * DEG_TO_RAD) * Math.cos(lat2 * DEG_TO_RAD) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const lat1Rad = lat1 * DEG_TO_RAD;
+    const lat2Rad = lat2 * DEG_TO_RAD;
+
+    const sinHalfLat = Math.sin(dLat * 0.5);
+    const sinHalfLon = Math.sin(dLon * 0.5);
+
+    const a = sinHalfLat * sinHalfLat + Math.cos(lat1Rad) * Math.cos(lat2Rad) * sinHalfLon * sinHalfLon;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
 export const unwrapLongitude = (lon, referenceLon) => {
     if (isNaN(referenceLon)) return lon;
-    let diff = lon - referenceLon;
+    const diff = lon - referenceLon;
     if (Math.abs(diff) > 180) {
         lon += (diff > 0) ? -360 : 360;
     }
@@ -146,10 +153,18 @@ export function createGeoCircle(centerLon, centerLat, radiusKm, numPoints = 64) 
     const lat1 = centerLat * DEG_TO_RAD;
     const lon1 = centerLon * DEG_TO_RAD;
 
+    const cosLat1 = Math.cos(lat1);
+    const sinLat1 = Math.sin(lat1);
+    const cosRadiusRad = Math.cos(radiusRad);
+    const sinRadiusRad = Math.sin(radiusRad);
+
     for (let i = 0; i <= numPoints; i++) {
         const bearing = (i / numPoints) * 2 * Math.PI;
-        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(radiusRad) + Math.cos(lat1) * Math.sin(radiusRad) * Math.cos(bearing));
-        const lon2 = lon1 + Math.atan2(Math.sin(bearing) * Math.sin(radiusRad) * Math.cos(lat1), Math.cos(radiusRad) - Math.sin(lat1) * Math.sin(lat2));
+        const cosBearing = Math.cos(bearing);
+        const sinBearing = Math.sin(bearing);
+
+        const lat2 = Math.asin(sinLat1 * cosRadiusRad + cosLat1 * sinRadiusRad * cosBearing);
+        const lon2 = lon1 + Math.atan2(sinBearing * sinRadiusRad * cosLat1, cosRadiusRad - sinLat1 * Math.sin(lat2));
 
         coords.push([lon2 * RAD_TO_DEG, lat2 * RAD_TO_DEG]);
     }
@@ -181,7 +196,7 @@ export const windToPressure = (windKts, circulationSize = 300, basin = 'WPAC', e
     if (backgroundPressure == null) {
         backgroundPressure = (basin === 'WPAC' || basin === 'NIO') ? 1010 : 1018;
     }
-    const basePressureCalc = backgroundPressure - 12.5 * Math.pow(windKts, 1.6) / 512.63; // 48.0^1.6 ≈ 512.63
+    const basePressureCalc = backgroundPressure - Math.pow(windKts, 1.6) * PRESSURE_COEFF;
     const pressure = basePressureCalc + (basePressureCalc - backgroundPressure) * (0.0012 * circulationSize);
     return Math.max(640, Math.round(pressure));
 };
@@ -194,7 +209,21 @@ export function getPressureAt(lon, lat, pressureSystemsLayer, useNoise = true) {
         const dx = shortestLongitudeDistance(lon, cell.x);
         const dy = lat - cell.y;
 
-        const exponent = -( ((dx * dx) / (2 * cell.sigmaX * cell.sigmaX)) + ((dy * dy) / (2 * cell.sigmaY * cell.sigmaY)) );
+        // memoize inverse values on objects dynamically to bypass heavy divisions
+        let inv2SigmaXSq = cell.inv2SigmaXSq;
+        let inv2SigmaYSq = cell.inv2SigmaYSq;
+        if (inv2SigmaXSq === undefined || cell._lastSigmaX !== cell.sigmaX) {
+            cell._lastSigmaX = cell.sigmaX;
+            cell.inv2SigmaXSq = 1 / (2 * cell.sigmaX * cell.sigmaX);
+            inv2SigmaXSq = cell.inv2SigmaXSq;
+        }
+        if (inv2SigmaYSq === undefined || cell._lastSigmaY !== cell.sigmaY) {
+            cell._lastSigmaY = cell.sigmaY;
+            cell.inv2SigmaYSq = 1 / (2 * cell.sigmaY * cell.sigmaY);
+            inv2SigmaYSq = cell.inv2SigmaYSq;
+        }
+
+        const exponent = -( (dx * dx) * inv2SigmaXSq + (dy * dy) * inv2SigmaYSq );
         const pressureOffset = Math.exp(exponent) * cell.strength;
 
         if (cell.noiseLayers) {
@@ -247,9 +276,12 @@ export function getSST(lat, lon, month, globalTempK = 289) {
     const absLat = Math.abs(lat);
     const monthDiff = Math.abs(month - 8);
 
+    const monthAngle = (month - 8) * (Math.PI / 6);
+    const cosMonth = Math.cos(monthAngle);
+
     const seasonalModifier = lat > 0
-        ? 2.8 + Math.cos((month - 8) * (Math.PI / 6)) * 1.7
-        : 2.0 - Math.cos((month - 8) * (Math.PI / 6)) * 1.3;
+        ? 2.8 + cosMonth * 1.7
+        : 2.0 - cosMonth * 1.3;
 
     let baseSST = absLat < 12
         ? (31.9 + 0.6 * tempAnomaly)

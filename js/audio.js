@@ -18,18 +18,22 @@ export function toggleSFX() {
 // create a simple reverb impulse response
 function createReverbBuffer() {
     const sampleRate = audioCtx.sampleRate;
-    const length = sampleRate * 1.5; // 1.5 second reverb
+    const length = Math.floor(sampleRate * 1.5); // 1.5 second reverb
     const impulse = audioCtx.createBuffer(2, length, sampleRate);
-    
-    for (let channel = 0; channel < 2; channel++) {
-        const channelData = impulse.getChannelData(channel);
-        for (let i = 0; i < length; i++) {
-            // exponentially decaying noise
-            const decay = 1 - i / length;
-            channelData[i] = (Math.random() * 2 - 1) * decay * decay * decay;
-        }
+
+    const leftChannel = impulse.getChannelData(0);
+    const rightChannel = impulse.getChannelData(1);
+    const invLength = 1 / length;
+
+    for (let i = 0; i < length; i++) {
+        // exponentially decaying noise calculated once per step
+        const decay = 1 - i * invLength;
+        const decay3 = decay * decay * decay;
+
+        leftChannel[i] = (Math.random() * 2 - 1) * decay3;
+        rightChannel[i] = (Math.random() * 2 - 1) * decay3;
     }
-    
+
     return impulse;
 }
 
@@ -38,21 +42,21 @@ export function initAudio() {
     if (!audioCtx) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContext();
-        
+
         // create analyser for visualization
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 2048;
-        
+
         // create reverb
         reverbNode = audioCtx.createConvolver();
         reverbNode.buffer = createReverbBuffer();
-        
+
         const reverbGain = audioCtx.createGain();
-        reverbGain.gain.value = 0.15; // subtle reverb
-        
+        reverbGain.gain.setValueAtTime(0.15, audioCtx.currentTime); // subtle reverb
+
         masterGain = audioCtx.createGain();
-        masterGain.gain.value = 0.25; // master volume
-        
+        masterGain.gain.setValueAtTime(0.25, audioCtx.currentTime); // master volume
+
         // master -> reverb -> analyser -> speaker
         masterGain.connect(analyser);
         masterGain.connect(reverbGain);
@@ -60,7 +64,7 @@ export function initAudio() {
         reverbNode.connect(analyser);
         analyser.connect(audioCtx.destination);
     }
-    
+
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
@@ -69,7 +73,7 @@ export function initAudio() {
 // the core synth engine
 function playSynth(options = {}) {
     if (!audioCtx || isSFXMuted) return null;
-    
+
     const t = options.startTime ?? audioCtx.currentTime;
     const {
         type = 'sine', freq = 440, freqEnd = null, duration = 0.2,
@@ -77,49 +81,49 @@ function playSynth(options = {}) {
         filterFreq = null, filterFreqEnd = null, filterQ = 1, detune = 0,
         dest = masterGain
     } = options;
-    
+
     const osc = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-    
+
     osc.type = type;
-    osc.detune.value = detune;
-    
+    osc.detune.setValueAtTime(detune, t);
+
     // frequency envelope (pitch sweep)
     osc.frequency.setValueAtTime(freq, t);
     if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, t + duration);
-    
+
     // volume envelope (ADSR)
     gainNode.gain.setValueAtTime(0, t);
     gainNode.gain.linearRampToValueAtTime(peakGain, t + attack);
     gainNode.gain.setValueAtTime(peakGain, t + duration - release);
     gainNode.gain.exponentialRampToValueAtTime(0.001, t + duration);
-    
+
     let currentNode = osc;
-    
+
     // lowpass filter for warmth
     if (filterFreq) {
         const filter = audioCtx.createBiquadFilter();
         filter.type = 'lowpass';
-        filter.Q.value = filterQ;
+        filter.Q.setValueAtTime(filterQ, t);
         filter.frequency.setValueAtTime(filterFreq, t);
         if (filterFreqEnd) filter.frequency.exponentialRampToValueAtTime(filterFreqEnd, t + duration);
-        
+
         currentNode.connect(filter);
         currentNode = filter;
     }
-    
+
     currentNode.connect(gainNode);
-    
+
     // route to destination(s)
     if (Array.isArray(dest)) {
         dest.forEach(d => gainNode.connect(d));
     } else {
         gainNode.connect(dest);
     }
-    
+
     osc.start(t);
     osc.stop(t + duration);
-    
+
     return gainNode;
 }
 
@@ -134,18 +138,18 @@ export function playToggleOn() {
     initAudio();
     const t = audioCtx.currentTime;
     [0, 8].forEach(detune => {
-        playSynth({ 
-            freq: 300, freqEnd: 600, startTime: t, duration: 0.2, peakGain: 0.15, detune, 
-            filterFreq: 1200, filterFreqEnd: 2400 
+        playSynth({
+            freq: 300, freqEnd: 600, startTime: t, duration: 0.2, peakGain: 0.15, detune,
+            filterFreq: 1200, filterFreqEnd: 2400
         });
     });
 }
 
 export function playToggleOff() {
     initAudio();
-    playSynth({ 
+    playSynth({
         freq: 600, freqEnd: 280, startTime: audioCtx.currentTime, duration: 0.18, peakGain: 0.18,
-        filterFreq: 2000, filterFreqEnd: 400, filterQ: 1.5 
+        filterFreq: 2000, filterFreqEnd: 400, filterQ: 1.5
     });
 }
 
@@ -170,35 +174,48 @@ export function playError() {
 export function playAlert() {
     initAudio();
     if (isSFXMuted) return;
-    
+
     const t = audioCtx.currentTime;
-    
-    // custom delay chain just for the alert
+
+    // custom delay chain
     const delay = audioCtx.createDelay(1.0);
-    delay.delayTime.value = 0.18;
+    delay.delayTime.setValueAtTime(0.18, t);
+
     const feedback = audioCtx.createGain();
-    feedback.gain.value = 0.3;
+    feedback.gain.setValueAtTime(0.3, t);
+
     const delayFilter = audioCtx.createBiquadFilter();
-    delayFilter.frequency.value = 1800;
-    
+    delayFilter.frequency.setValueAtTime(1800, t);
+
     delay.connect(feedback);
     feedback.connect(delayFilter);
     delayFilter.connect(delay);
     delay.connect(masterGain);
-    
+
     [659.25, 783.99, 987.77].forEach((freq, i) => {
-        playSynth({ 
-            freq, startTime: t + (i * 0.12), duration: 0.35, peakGain: 0.22, 
-            filterFreq: 3000, dest: [masterGain, delay] 
+        playSynth({
+            freq, startTime: t + (i * 0.12), duration: 0.35, peakGain: 0.22,
+            filterFreq: 3000, dest: [masterGain, delay]
         });
     });
+
+    // disconnect custom routing nodes to prevent context-wide node leaks
+    setTimeout(() => {
+        try {
+            delay.disconnect();
+            feedback.disconnect();
+            delayFilter.disconnect();
+        } catch (e) {
+            // context may already be released
+        }
+    }, 2500);
 }
 
 export function playUpgradeSound() {
     initAudio();
     const now = audioCtx.currentTime;
     const notes = [523.25, 659.25, 783.99, 987.77];
-    
+
     [0, 0.65].forEach(delayOffset => {
         notes.forEach((freq, i) => {
             const st = now + delayOffset + (i * 0.10);
@@ -213,7 +230,7 @@ export function playCat5Sound() {
     initAudio();
     const now = audioCtx.currentTime;
     const notes = [523.25, 659.25, 783.99, 987.77, 1174.66];
-    
+
     [0, 0.75].forEach(delayOffset => {
         notes.forEach((freq, i) => {
             const st = now + delayOffset + (i * 0.09);

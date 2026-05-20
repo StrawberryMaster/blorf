@@ -7,10 +7,40 @@ import { getWindVectorAt } from './cyclone-model.js';
 import { generatePathForecasts } from './forecast-models.js';
 import { getElevationAt, getLandStatus } from './terrain-data.js';
 
-// simple pseudo-random noise function (for macro-scale humidity fluctuations)
-function pseudoNoise(x, y) {
-    const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-    return n - Math.floor(n);
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+
+let persistentBatchLow = null;
+let persistentBatchHigh = null;
+let persistentBatchExt = null;
+let persistentHumidityGrid = null;
+let persistentPressureGrid = null;
+
+function getBatchBuffers(capacity) {
+    if (!persistentBatchLow || persistentBatchLow.length < capacity) {
+        persistentBatchLow = new Float32Array(capacity);
+        persistentBatchHigh = new Float32Array(capacity);
+        persistentBatchExt = new Float32Array(capacity);
+    }
+    return {
+        batchLow: persistentBatchLow,
+        batchHigh: persistentBatchHigh,
+        batchExt: persistentBatchExt
+    };
+}
+
+function getHumidityGrid(size) {
+    if (!persistentHumidityGrid || persistentHumidityGrid.length < size) {
+        persistentHumidityGrid = new Float32Array(size);
+    }
+    return persistentHumidityGrid;
+}
+
+function getPressureGrid(size) {
+    if (!persistentPressureGrid || persistentPressureGrid.length < size) {
+        persistentPressureGrid = new Float32Array(size);
+    }
+    return persistentPressureGrid;
 }
 
 // smoothed noise via bilinear interpolation
@@ -24,16 +54,19 @@ export function smoothNoise(x, y) {
     const uSm = u * u * (3 - 2 * u);
     const vSm = v * v * (3 - 2 * v);
 
-    const n00 = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+    const iFactor = i * 12.9898;
+    const jFactor = j * 78.233;
+
+    const n00 = Math.sin(iFactor + jFactor) * 43758.5453;
     const p00 = n00 - Math.floor(n00);
 
-    const n10 = Math.sin((i + 1) * 12.9898 + j * 78.233) * 43758.5453;
+    const n10 = Math.sin(iFactor + 12.9898 + jFactor) * 43758.5453;
     const p10 = n10 - Math.floor(n10);
 
-    const n01 = Math.sin(i * 12.9898 + (j + 1) * 78.233) * 43758.5453;
+    const n01 = Math.sin(iFactor + jFactor + 78.233) * 43758.5453;
     const p01 = n01 - Math.floor(n01);
 
-    const n11 = Math.sin((i + 1) * 12.9898 + (j + 1) * 78.233) * 43758.5453;
+    const n11 = Math.sin(iFactor + 12.9898 + jFactor + 78.233) * 43758.5453;
     const p11 = n11 - Math.floor(n11);
 
     const x1 = p00 + (p10 - p00) * uSm;
@@ -57,7 +90,7 @@ export function calculateBackgroundHumidity(lon, lat, pressureSystems, currentMo
     hum += (noise - 0.5) * 35;
 
     // latitude correction (wet equator, dry poles)
-    const latRad = lat * Math.PI / 180;
+    const latRad = lat * DEG_TO_RAD;
     hum *= (0.6 + 0.4 * Math.cos(latRad));
 
     const isNorth = lat > 0;
@@ -77,7 +110,7 @@ export function calculateBackgroundHumidity(lon, lat, pressureSystems, currentMo
     const waveNumber = 5.0;
     const phaseSpeed = (cyclone ? cyclone.age : 0) * 0.02;
     const waveAmplitude = 6.0;
-    const rossbyOffset = Math.sin((lon * Math.PI / 180) * waveNumber + phaseSpeed) * waveAmplitude;
+    const rossbyOffset = Math.sin((lon * DEG_TO_RAD) * waveNumber + phaseSpeed) * waveAmplitude;
 
     // jet stream turbulence overlay
     const jetNoise = (smoothNoise(lon * 0.08, timeFactor) - 0.5) * 8.0;
@@ -97,9 +130,8 @@ export function calculateBackgroundHumidity(lon, lat, pressureSystems, currentMo
     // Foehn effect trail backtracking
     if (cyclone) {
         const vec = getWindVectorAt(lon, lat, currentMonth, cyclone, pressureSystems);
-        const len = Math.sqrt(vec.u * vec.u + vec.v * vec.v);
-
-        let windWeight = Math.max(0, Math.min(1, (len - 15.0) / 15.0));
+        const len = vec.magnitude;
+        const windWeight = Math.max(0, Math.min(1, (len - 15.0) / 15.0));
 
         if (windWeight > 0.01) {
             const dirU = vec.u / len;
@@ -113,11 +145,14 @@ export function calculateBackgroundHumidity(lon, lat, pressureSystems, currentMo
                 const dist = i * stepSize;
                 const upLon = lon - (dirU * dist);
                 const upLat = lat - (dirV * dist);
-                const upElevation = getElevationAt(upLon, upLat);
-                const elevationDiff = upElevation - elevation;
 
+                const upElevation = getElevationAt(upLon, upLat);
+                // skip calculation if upstream is ocean and current is ocean
+                if (upElevation <= 0 && elevation <= 0) continue;
+
+                const elevationDiff = upElevation - elevation;
                 if (elevationDiff > 30) {
-                    let impact = (elevationDiff / 30) * (vec.magnitude - 22) * Math.exp(-dist * decayFactor);
+                    const impact = (elevationDiff / 30) * (len - 22) * Math.exp(-dist * decayFactor);
                     if (impact > maxDryImpact) maxDryImpact = impact;
                 }
             }
@@ -159,8 +194,8 @@ export function drawHumidityField(container, mapProjection, pressureSystems, cyc
     const { width, height } = svgNode.getBoundingClientRect();
 
     const nx = 56, ny = Math.round(nx * height / width);
-
-    const grid = new Float32Array(nx * ny);
+    const gridSize = nx * ny;
+    const grid = getHumidityGrid(gridSize);
 
     for (let j = 0; j < ny; ++j) {
         for (let i = 0; i < nx; ++i) {
@@ -179,7 +214,7 @@ export function drawHumidityField(container, mapProjection, pressureSystems, cyc
 
     container.selectAll("path")
         .data(contours(grid))
-        .enter().append("path")
+        .join("path")
         .attr("d", pathGenerator)
         .attr("class", d => {
             if (d.value >= 90) return "isohume-high";
@@ -208,13 +243,12 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
 
     if (!cyclone.radiiState) cyclone.radiiState = {};
 
-    const PI_OVER_180 = Math.PI / 180;
     const DEG_PER_KM = 1 / 111.32;
     const centerLon = cyclone.lon;
     const centerLat = cyclone.lat;
-    const lonScale = 1.0 / Math.max(0.1, Math.cos(centerLat * PI_OVER_180));
+    const lonScale = 1.0 / Math.max(0.1, Math.cos(centerLat * DEG_TO_RAD));
 
-    // Pre-calculate trigonometric lookups
+    // fast radial limit checking via discrete binary search
     const measureRadiusFast = (cosA, sinA, threshold) => {
         const peakDistDeg = RMW_KM * DEG_PER_KM;
         const peakLon = centerLon + peakDistDeg * cosA * lonScale;
@@ -222,17 +256,26 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
 
         if (getWindVectorAt(peakLon, peakLat, currentMonth, cyclone, pressureSystems).magnitude < threshold) return 0;
 
-        let currentDist = RMW_KM;
-        const stepDeg = STEP_KM * DEG_PER_KM;
+        const maxSteps = Math.floor((MAX_SEARCH_KM - RMW_KM) / STEP_KM);
+        let left = 0;
+        let right = maxSteps;
+        let ans = maxSteps;
 
-        while (currentDist < MAX_SEARCH_KM) {
+        while (left <= right) {
+            const mid = (left + right) >> 1;
+            const currentDist = RMW_KM + mid * STEP_KM;
             const distDeg = currentDist * DEG_PER_KM;
             const sampleLon = centerLon + distDeg * cosA * lonScale;
             const sampleLat = centerLat + distDeg * sinA;
-            if (getWindVectorAt(sampleLon, sampleLat, currentMonth, cyclone, pressureSystems).magnitude < threshold) return currentDist;
-            currentDist += STEP_KM;
+
+            if (getWindVectorAt(sampleLon, sampleLat, currentMonth, cyclone, pressureSystems).magnitude < threshold) {
+                ans = mid;
+                right = mid - 1;
+            } else {
+                left = mid + 1;
+            }
         }
-        return currentDist;
+        return RMW_KM + ans * STEP_KM;
     };
 
     const quadrants = [
@@ -241,6 +284,8 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
         { id: 2, start: 180, end: 270 },
         { id: 3, start: 270, end: 360 }
     ];
+
+    const activeLevels = [];
 
     windData.forEach(level => {
         if (!level.active) return;
@@ -258,8 +303,8 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
             } else {
                 let maxRadiusInQuad = 0;
                 for (let angle = quad.start; angle <= quad.end; angle += SCAN_ANGLE_STEP) {
-                    const rad = angle * PI_OVER_180;
-                    let r = measureRadiusFast(Math.cos(rad), Math.sin(rad), level.threshold) * level.visualScale;
+                    const rad = angle * DEG_TO_RAD;
+                    const r = measureRadiusFast(Math.cos(rad), Math.sin(rad), level.threshold) * level.visualScale;
                     if (r > maxRadiusInQuad) maxRadiusInQuad = r;
                 }
 
@@ -278,7 +323,7 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
             hasValidPoints = true;
             const distDeg = smoothedRadius * DEG_PER_KM;
             for (let angle = quad.start; angle <= quad.end; angle += DRAW_ARC_STEP) {
-                const rad = angle * PI_OVER_180;
+                const rad = angle * DEG_TO_RAD;
                 polyPoints.push([
                     centerLon + distDeg * Math.cos(rad) * lonScale,
                     centerLat + distDeg * Math.sin(rad)
@@ -289,18 +334,24 @@ function drawWindRadii(container, pathGenerator, cyclone, pressureSystems, isPau
         if (hasValidPoints && polyPoints.length > 2) {
             polyPoints.push(polyPoints[0]);
             if (d3.polygonArea(polyPoints) < 0) polyPoints.reverse();
-
-            container.append("path")
-                .datum({ type: "Polygon", coordinates: [polyPoints] })
-                .attr("class", "wind-radii")
-                .style("fill", level.color)
-                .style("fill-rule", "evenodd")
-                .style("stroke", d3.color(level.color).darker(0.5))
-                .style("stroke-width", 0.8)
-                .style("opacity", 0.4)
-                .attr("d", pathGenerator);
+            activeLevels.push({
+                type: "Polygon",
+                coordinates: [polyPoints],
+                color: level.color
+            });
         }
     });
+
+    container.selectAll("path")
+        .data(activeLevels)
+        .join("path")
+        .attr("class", "wind-radii")
+        .style("fill", d => d.color)
+        .style("fill-rule", "evenodd")
+        .style("stroke", d => d3.color(d.color).darker(0.5))
+        .style("stroke-width", 0.8)
+        .style("opacity", 0.4)
+        .attr("d", pathGenerator);
 }
 
 let landCanvas = null;
@@ -341,8 +392,8 @@ function initLandGrid(world) {
 
 function checkLandFast(lon, lat) {
     if (!landGrid) return false;
-    let x = Math.max(0, Math.min(Math.floor((lon + 180) * (landGridWidth / 360)), landGridWidth - 1));
-    let y = Math.max(0, Math.min(Math.floor((90 - lat) * (landGridHeight / 180)), landGridHeight - 1));
+    const x = Math.max(0, Math.min(Math.floor((lon + 180) * (landGridWidth / 360)), landGridWidth - 1));
+    const y = Math.max(0, Math.min(Math.floor((90 - lat) * (landGridHeight / 180)), landGridHeight - 1));
     return landGrid[y * landGridWidth + x] === 1;
 }
 
@@ -386,21 +437,17 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
     const headLen = 5;
 
     const maxCapacity = Math.ceil((GEO_RANGE / GEO_STEP) * (GEO_RANGE / GEO_STEP)) * 8;
-    const batchLow = new Float32Array(maxCapacity);
-    const batchHigh = new Float32Array(maxCapacity);
-    const batchExt = new Float32Array(maxCapacity);
+    const { batchLow, batchHigh, batchExt } = getBatchBuffers(maxCapacity);
     let idxLow = 0, idxHigh = 0, idxExt = 0;
 
-    const startLat = Math.floor(cyclone.lat - GEO_RANGE * 0.5);
-    const endLat = Math.ceil(cyclone.lat + GEO_RANGE * 0.5);
+    const startLat = Math.max(-90, Math.floor(cyclone.lat - GEO_RANGE * 0.5));
+    const endLat = Math.min(90, Math.ceil(cyclone.lat + GEO_RANGE * 0.5));
     const startLon = Math.floor(cyclone.lon - GEO_RANGE);
     const endLon = Math.ceil(cyclone.lon + GEO_RANGE);
 
     const ANGLE_BACK = Math.PI * 0.85;
 
     for (let lat = startLat; lat <= endLat; lat += GEO_STEP) {
-        if (lat < -90 || lat > 90) continue;
-
         for (let lon = startLon; lon <= endLon; lon += GEO_STEP) {
             const proj = mapProjection([lon, lat]);
             if (!proj || isNaN(proj[0]) || isNaN(proj[1])) continue;
@@ -408,7 +455,7 @@ export function drawWindField(mapSvg, mapProjection, cyclone, pressureSystems, w
 
             if (x < -20 || x > width + 20 || y < -20 || y > height + 20) continue;
 
-            let vec = getWindVectorAt(lon, lat, currentMonth, cyclone, pressureSystems);
+            const vec = getWindVectorAt(lon, lat, currentMonth, cyclone, pressureSystems);
             if (vec.magnitude <= 0) continue;
 
             const angle = Math.atan2(-vec.v, vec.u);
@@ -471,9 +518,6 @@ export function drawForecastCone(container, mapProjection, pathForecasts) {
     const forecastSteps = pathForecasts[0].track.length;
     const geoPath = d3.geoPath().projection(mapProjection);
 
-    container.selectAll(".forecast-cone-container").remove();
-    container.selectAll(".forecast-center-line").remove();
-
     const coneSegments = [];
     const meanTrackCoordinates = [];
     let lastStepData = null;
@@ -496,7 +540,7 @@ export function drawForecastCone(container, mapProjection, pathForecasts) {
 
     const keyframes = [8, 16, 24];
     let quantizedLimit = 8;
-    for (let k of keyframes) {
+    for (const k of keyframes) {
         if (rawDeathIndex >= k) quantizedLimit = k;
         else break;
     }
@@ -524,7 +568,7 @@ export function drawForecastCone(container, mapProjection, pathForecasts) {
 
         const stdDev = d3.deviation(unwrappedPoints, p => Math.hypot(p[0] - avgLonUnwrapped, p[1] - avgLat)) || 0;
         const radiusDeg = (0.25 + i * 0.14) + (stdDev * 0.6);
-        const cosL = Math.cos(avgLat * Math.PI / 180);
+        const cosL = Math.cos(avgLat * DEG_TO_RAD);
 
         let angle = 0;
         if (i < quantizedLimit) {
@@ -538,8 +582,8 @@ export function drawForecastCone(container, mapProjection, pathForecasts) {
         }
 
         const normal = angle + Math.PI / 2;
-        let leftLon = avgLonUnwrapped + (radiusDeg * Math.cos(normal) / cosL);
-        let rightLon = avgLonUnwrapped + (radiusDeg * Math.cos(normal + Math.PI) / cosL);
+        const leftLon = avgLonUnwrapped + (radiusDeg * Math.cos(normal) / cosL);
+        const rightLon = avgLonUnwrapped + (radiusDeg * Math.cos(normal + Math.PI) / cosL);
 
         const normalize = (lon) => {
             while (lon > 180) lon -= 360;
@@ -569,57 +613,76 @@ export function drawForecastCone(container, mapProjection, pathForecasts) {
         lastStepData = currentStep;
     }
 
-    let svg = d3.select(container.node().nearestViewportElement);
+    const svg = d3.select(container.node().nearestViewportElement);
     if (svg.select("#cone-merge-filter").empty()) {
         svg.append("defs").append("filter").attr("id", "cone-merge-filter").append("feComponentTransfer").append("feFuncA").attr("type", "discrete").attr("tableValues", "0 1");
     }
 
-    const coneGroup = container.append("g")
+    const coneGroup = container.selectAll(".forecast-cone-container")
+        .data([coneSegments])
+        .join("g")
         .attr("class", "forecast-cone-container")
         .attr("filter", "url(#cone-merge-filter)")
         .style("opacity", 0.15);
 
     coneGroup.selectAll("path")
-        .data(coneSegments)
-        .enter().append("path")
+        .data(d => d)
+        .join("path")
         .attr("d", geoPath)
         .style("fill", "rgb(85, 105, 160)")
         .style("stroke", "none")
         .style("pointer-events", "none");
 
-    if (meanTrackCoordinates.length > 1) {
-        container.append("path")
-            .datum({ type: "Feature", geometry: { type: "LineString", coordinates: meanTrackCoordinates } })
-            .attr("class", "forecast-center-line")
-            .attr("d", geoPath)
-            .style("fill", "none")
-            .style("stroke", "cyan")
-            .style("stroke-width", 2)
-            .style("stroke-dasharray", "4, 3")
-            .style("opacity", 0.8)
-            .style("pointer-events", "none");
-    }
+    const centerLineData = meanTrackCoordinates.length > 1 ? [{ type: "Feature", geometry: { type: "LineString", coordinates: meanTrackCoordinates } }] : [];
+    container.selectAll(".forecast-center-line")
+        .data(centerLineData)
+        .join("path")
+        .attr("class", "forecast-center-line")
+        .attr("d", geoPath)
+        .style("fill", "none")
+        .style("stroke", "cyan")
+        .style("stroke-width", 2)
+        .style("stroke-dasharray", "4, 3")
+        .style("opacity", 0.8)
+        .style("pointer-events", "none");
 
     const labelsToDraw = [8, 16, 24];
+    const stepLabelData = [];
     labelsToDraw.forEach(idx => {
         if (idx > quantizedLimit) return;
-
         const step = pathForecasts[0].track[idx];
         if (step) {
-            const proj = mapProjection([step[0], step[1]]);
-            if (proj) {
-                container.append("circle").attr("cx", proj[0]).attr("cy", proj[1]).attr("r", 3).attr("fill", "white");
-                container.append("text")
-                    .attr("x", proj[0]).attr("y", proj[1] - 7)
+            stepLabelData.push({ idx, step });
+        }
+    });
+
+    container.selectAll(".forecast-label-group")
+        .data(stepLabelData, d => d.idx)
+        .join(
+            enter => {
+                const g = enter.append("g").attr("class", "forecast-label-group");
+                g.append("circle").attr("r", 3).attr("fill", "white");
+                g.append("text")
                     .attr("text-anchor", "middle")
                     .style("font-size", "10px")
                     .style("font-family", "Monospace")
                     .style("fill", "white")
-                    .style("text-shadow", "0 1px 2px black")
-                    .text(`+${idx * 3}h`);
-            }
-        }
-    });
+                    .style("text-shadow", "0 1px 2px black");
+                return g;
+            },
+            update => update,
+            exit => exit.remove()
+        )
+        .each(function(d) {
+            const proj = mapProjection([d.step[0], d.step[1]]);
+            if (!proj) return;
+            const g = d3.select(this);
+            g.select("circle").attr("cx", proj[0]).attr("cy", proj[1]);
+            g.select("text")
+                .attr("x", proj[0])
+                .attr("y", proj[1] - 7)
+                .text(`+${d.idx * 3}h`);
+        });
 }
 
 function drawPressureField(container, mapProjection, pressureSystemsObj) {
@@ -627,7 +690,8 @@ function drawPressureField(container, mapProjection, pressureSystemsObj) {
     const { width, height } = svgNode.getBoundingClientRect();
     const nx = 80, ny = Math.round(nx * height / width);
 
-    const grid = new Float32Array(nx * ny);
+    const gridSize = nx * ny;
+    const grid = getPressureGrid(gridSize);
     const systemsLayer = Array.isArray(pressureSystemsObj) ? pressureSystemsObj : (pressureSystemsObj.lower || []);
 
     for (let j = 0; j < ny; ++j) {
@@ -645,7 +709,9 @@ function drawPressureField(container, mapProjection, pressureSystemsObj) {
     const transform = d3.geoTransform({ point: function(x, y) { this.stream.point(x * width / nx, y * height / ny); } });
     const pathGenerator = d3.geoPath().projection(transform);
 
-    container.append("g").selectAll("path").data(contours(grid)).enter().append("path")
+    container.selectAll("path")
+        .data(contours(grid))
+        .join("path")
         .attr("class", d => d.value > 1012 ? "isobar" : "isobar-low")
         .attr("d", pathGenerator);
 }
@@ -716,24 +782,28 @@ export function drawMap(mapSvg, mapProjection, world, cyclone, options = {}) {
         }
     }
 
-    pressureLayer.selectAll("*").remove();
     if (showPressureField && cyclone && cyclone.status === 'active') {
         drawPressureField(pressureLayer, mapProjection, pressureSystems);
+    } else {
+        pressureLayer.selectAll("*").remove();
     }
 
-    humidityLayer.selectAll("*").remove();
     if (showHumidityField && cyclone && cyclone.status === 'active') {
         drawHumidityField(humidityLayer, mapProjection, pressureSystems, cyclone, options.globalTemp);
+    } else {
+        humidityLayer.selectAll("*").remove();
     }
 
-    windRadiiLayer.selectAll("*").remove();
     if (showWindRadii && cyclone && cyclone.status === 'active') {
         drawWindRadii(windRadiiLayer, pathGenerator, cyclone, pressureSystems, isPaused);
+    } else {
+        windRadiiLayer.selectAll("*").remove();
     }
 
-    forecastLayer.selectAll("*").remove();
     if (showPathForecast && pathForecasts && pathForecasts.length > 0) {
         drawForecastCone(forecastLayer, mapProjection, pathForecasts);
+    } else {
+        forecastLayer.selectAll("*").remove();
     }
 
     if (cyclone && cyclone.track && cyclone.track.length > 1) {
@@ -767,15 +837,10 @@ export function drawMap(mapSvg, mapProjection, world, cyclone, options = {}) {
 
         trackLineLayer.selectAll(".storm-track")
             .data(segmentData)
-            .join(
-                enter => enter.append("path")
-                    .attr("class", "storm-track")
-                    .attr("d", pathGenerator)
-                    .style("stroke", d => getCategory(d.intensity, d.isT, d.isE, d.isS).color),
-                update => update
-                    .attr("d", pathGenerator)
-                    .style("stroke", d => getCategory(d.intensity, d.isT, d.isE, d.isS).color)
-            );
+            .join("path")
+            .attr("class", "storm-track")
+            .attr("d", pathGenerator)
+            .style("stroke", d => getCategory(d.intensity, d.isT, d.isE, d.isS).color);
 
         if (showPathPoints) {
             // need to recreate unwrapped track for points correctly, or use the unwrapped list logic
@@ -791,17 +856,11 @@ export function drawMap(mapSvg, mapProjection, world, cyclone, options = {}) {
 
             trackPointLayer.selectAll("circle")
                 .data(pointDisplayData)
-                .join(
-                    enter => enter.append("circle")
-                        .attr("r", 4.5).attr("stroke", "#222222").attr("stroke-width", 1)
-                        .attr("cx", d => mapProjection([d[0], d[1]])[0])
-                        .attr("cy", d => mapProjection([d[0], d[1]])[1])
-                        .style("fill", d => getCategory(d[2], d[3], d[4], d[5]).color),
-                    update => update
-                        .attr("cx", d => mapProjection([d[0], d[1]])[0])
-                        .attr("cy", d => mapProjection([d[0], d[1]])[1])
-                        .style("fill", d => getCategory(d[2], d[3], d[4], d[5]).color)
-                );
+                .join("circle")
+                .attr("r", 4.5).attr("stroke", "#222222").attr("stroke-width", 1)
+                .attr("cx", d => mapProjection([d[0], d[1]])[0])
+                .attr("cy", d => mapProjection([d[0], d[1]])[1])
+                .style("fill", d => getCategory(d[2], d[3], d[4], d[5]).color);
         } else {
             trackPointLayer.selectAll("*").remove();
         }
@@ -813,18 +872,12 @@ export function drawMap(mapSvg, mapProjection, world, cyclone, options = {}) {
     if (cyclone && cyclone.status === 'active') {
         cycloneLayer.selectAll("circle")
             .data([cyclone])
-            .join(
-                enter => enter.append("circle")
-                    .attr("r", 7).attr("stroke", "white").attr("stroke-width", 1.5)
-                    .attr("cx", d => mapProjection([d.lon, d.lat])[0])
-                    .attr("cy", d => mapProjection([d.lon, d.lat])[1])
-                    .attr("fill", d => getCategory(d.intensity, d.isTransitioning, d.isExtratropical, d.isSubtropical).color),
-                update => update
-                    .attr("cx", d => mapProjection([d.lon, d.lat])[0])
-                    .attr("cy", d => mapProjection([d.lon, d.lat])[1])
-                    .attr("fill", d => getCategory(d.intensity, d.isTransitioning, d.isExtratropical, d.isSubtropical).color)
-                    .attr("class", d => d.intensity >= 96 && !d.isExtratropical ? "extreme-intensity-glow" : "")
-            );
+            .join("circle")
+            .attr("r", 7).attr("stroke", "white").attr("stroke-width", 1.5)
+            .attr("cx", d => mapProjection([d.lon, d.lat])[0])
+            .attr("cy", d => mapProjection([d.lon, d.lat])[1])
+            .attr("fill", d => getCategory(d.intensity, d.isTransitioning, d.isExtratropical, d.isSubtropical).color)
+            .attr("class", d => d.intensity >= 96 && !d.isExtratropical ? "extreme-intensity-glow" : "");
     } else {
         cycloneLayer.selectAll("*").remove();
     }
@@ -984,7 +1037,7 @@ export function drawFinalPath(mapSvg, mapProjection, cyclone, world, tooltip, si
                 const [lon, lat, intensity, isT, isE, circulationSize, isS, , , , storedPressure] = data;
 
                 const category = getCategory(intensity, isT, isE, isS);
-                let pressure = (storedPressure !== undefined && storedPressure !== null) ? storedPressure :
+                const pressure = (storedPressure !== undefined && storedPressure !== null) ? storedPressure :
                     Math.round(windToPressure(intensity, typeof circulationSize === 'number' ? circulationSize : 250, basin, getPressureAt(lon, lat, pressureSystems)));
 
                 const latStr = `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? 'N' : 'S'}`;
@@ -1136,7 +1189,7 @@ export function drawAllHistoryTracks(mapSvg, mapProjection, historyList, world) 
         const unwrappedTrack = rawTrack.map((p, idx) => {
             let lon = p[0];
             if (!isNaN(lastUnwrappedLon)) {
-                let diff = lon - lastUnwrappedLon;
+                const diff = lon - lastUnwrappedLon;
                 if (Math.abs(diff) > 180) lon += (diff > 0) ? -360 : 360;
             }
 
@@ -1205,16 +1258,19 @@ function drawInteractivePressureSystems(container, mapProjection, renderableSyst
         return viewCenterLon + diff;
     };
 
-    const handles = container.selectAll(".pressure-handle").data(renderableSystems);
+    // binding by individual ID or coordinates to reuse components smoothly
+    const handles = container.selectAll(".pressure-handle")
+        .data(renderableSystems, d => d.id || `${d.x}_${d.y}_${d.strength}`);
+
     const enterHandles = handles.enter().append("g").attr("class", "pressure-handle").style("cursor", "grab");
 
-    enterHandles.append("circle").attr("class", "halo").attr("r", 20).attr("fill", "none").attr("stroke", d => d.strength > 0 ? "#2980b9" : "#c0392b").attr("stroke-width", 1).attr("opacity", 0.3).style("pointer-events", "none");
+    enterHandles.append("circle").attr("class", "halo").attr("r", 20).attr("fill", "none").attr("stroke-width", 1).attr("opacity", 0.3).style("pointer-events", "none");
     enterHandles.append("circle").attr("class", "core").attr("r", 12).attr("stroke", "white").attr("stroke-width", 1.5).attr("fill-opacity", 0.8);
     enterHandles.append("text").attr("dy", "0.35em").attr("text-anchor", "middle").style("font-family", "Arial, sans-serif").style("font-weight", "bold").style("font-size", "11px").style("fill", "white").style("pointer-events", "none");
 
     const allHandles = enterHandles.merge(handles);
 
-    allHandles.on("dblclick", (event, d) => {
+    enterHandles.on("dblclick", (event, d) => {
         event.stopPropagation();
         event.preventDefault();
         if (d.isManual && onRemove) onRemove(d);
@@ -1230,7 +1286,10 @@ function drawInteractivePressureSystems(container, mapProjection, renderableSyst
     allHandles.select("text").text(d => d.strength > 0 ? "H" : "L");
 
     const dragBehavior = d3.drag()
-        .subject(function(event, d) { return { x: mapProjection([getVisualLon(d.x), d.y])[0], y: mapProjection([getVisualLon(d.x), d.y])[1] }; })
+        .subject(function(event, d) {
+            const coords = mapProjection([getVisualLon(d.x), d.y]);
+            return coords ? { x: coords[0], y: coords[1] } : { x: 0, y: 0 };
+        })
         .on("start", function(event, d) { d3.select(this).style("cursor", "grabbing"); d3.select(this).select(".core").attr("stroke", "#f1c40f").attr("stroke-width", 3); })
         .on("drag", function(event, d) {
             d3.select(this).attr("transform", `translate(${event.x}, ${event.y})`);
@@ -1251,14 +1310,12 @@ function drawInteractivePressureSystems(container, mapProjection, renderableSyst
 
             const pressureLayer = svg.select(".layer-pressure");
             if (!pressureLayer.empty()) {
-                pressureLayer.selectAll("*").remove();
                 drawPressureField(pressureLayer, mapProjection, allPressureSystems);
             }
 
             if (cyclone && cyclone.status === 'active') {
                 const forecastLayer = svg.select(".layer-forecast");
                 if (!forecastLayer.empty()) {
-                    forecastLayer.selectAll("*").remove();
                     const newForecasts = generatePathForecasts(cyclone, allPressureSystems, checkLandFast);
                     drawForecastCone(forecastLayer, mapProjection, newForecasts);
                 }
@@ -1296,7 +1353,7 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
     const currentAge = timeIndex * 3;
     const snapAge = Math.floor(currentAge / 6) * 6;
 
-    let forecastModelsRaw = (cyclone.forecastLogs && cyclone.forecastLogs[snapAge]) ? cyclone.forecastLogs[snapAge] : ((cyclone.status === 'active' && cyclone.pathForecasts) ? cyclone.pathForecasts : []);
+    const forecastModelsRaw = (cyclone.forecastLogs && cyclone.forecastLogs[snapAge]) ? cyclone.forecastLogs[snapAge] : ((cyclone.status === 'active' && cyclone.pathForecasts) ? cyclone.pathForecasts : []);
     const forecastModels = forecastModelsRaw.map(model => ({ ...model, track: model.track.map(p => [unwrapLon(p[0], centerLon), p[1], p[2]]) }));
 
     const projection = d3.geoEquirectangular().rotate([-centerLon, 0]).center([0, centerLat]).scale(3500).translate([width / 2, height / 2]);
@@ -1339,7 +1396,7 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
         }
 
         let quantizedLimit = 8;
-        for (let k of [4, 8, 12, 16, 24]) { if (rawDeathIndex >= k) quantizedLimit = k; else break; }
+        for (const k of [4, 8, 12, 16, 24]) { if (rawDeathIndex >= k) quantizedLimit = k; else break; }
         quantizedLimit = Math.min(quantizedLimit, maxSteps - 1);
 
         const boundaryPoints = []; const rawSteps = []; const meanTrack = []; let maxRadiusSoFar = 0.02;
@@ -1352,10 +1409,10 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
             const avgLon = d3.mean(pointsAtStep, p => p[0]), avgLat = d3.mean(pointsAtStep, p => p[1]);
             meanTrack.push([avgLon, avgLat]);
 
-            const stdDev = d3.deviation(pointsAtStep, p => Math.hypot((p[0] - avgLon) * Math.cos(avgLat * Math.PI / 180), p[1] - avgLat)) || 0;
-            let radiusDeg = Math.max(0.02, (0.02 + i * 0.14) + (stdDev * 1.5));
+            const stdDev = d3.deviation(pointsAtStep, p => Math.hypot((p[0] - avgLon) * Math.cos(avgLat * DEG_TO_RAD), p[1] - avgLat)) || 0;
+            const radiusDeg = Math.max(0.02, (0.02 + i * 0.14) + (stdDev * 1.5));
             maxRadiusSoFar = Math.max(maxRadiusSoFar, radiusDeg);
-            rawSteps.push({ lon: avgLon, lat: avgLat, r: maxRadiusSoFar, cosL: Math.cos(avgLat * Math.PI / 180) });
+            rawSteps.push({ lon: avgLon, lat: avgLat, r: maxRadiusSoFar, cosL: Math.cos(avgLat * DEG_TO_RAD) });
         }
 
         for (let i = 0; i < rawSteps.length; i++) {
@@ -1433,7 +1490,7 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
                 if (prevPoints.length > 0) prevP = projection([d3.mean(prevPoints, v=>v[0]), d3.mean(prevPoints, v=>v[1])]);
             }
 
-            let tangentAngle = (nextP && prevP) ? Math.atan2(nextP[1] - prevP[1], nextP[0] - prevP[0]) : ((nextP) ? Math.atan2(nextP[1] - pos[1], nextP[0] - pos[0]) : Math.atan2(pos[1] - prevP[1], pos[0] - prevP[0]));
+            const tangentAngle = (nextP && prevP) ? Math.atan2(nextP[1] - prevP[1], nextP[0] - prevP[0]) : ((nextP) ? Math.atan2(nextP[1] - pos[1], nextP[0] - pos[0]) : Math.atan2(pos[1] - prevP[1], pos[0] - prevP[0]));
             let normalAngle = tangentAngle + Math.PI / 2;
             let labelX = pos[0] + Math.cos(normalAngle) * 145, labelY = pos[1] + Math.sin(normalAngle) * 145;
 
@@ -1491,7 +1548,7 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
     ctx.fillText(`PROGNOSTIC REASONING: ${(cyclone.name || 'TD').toUpperCase()} #${timeIndex + 1}`, 20, 32);
     ctx.textAlign = "right"; ctx.fillText("INDEPENDENT CYCLONE WARNING CENTER", width - 20, 32);
 
-    ctx.fillStyle = "red"; ctx.font = "bold 16px Arial"; ctx.textAlign = "center"; ctx.fillText("WARNING: THIS IS NOT REAL LOL / FOR SIMULATION ONLY", width / 2, height - 20);
+    ctx.fillStyle = "red"; ctx.font = "bold 16px Arial"; ctx.textAlign = "center"; ctx.fillText("WARNING: THIS IS NOT REAL / FOR SIMULATION ONLY", width / 2, height - 20);
 
     const legendW = 260, legendH = 210, legendX = width - legendW - 20, legendY = 60, iconX = legendX + 30;
     ctx.save(); ctx.fillStyle = "white"; ctx.strokeStyle = "black"; ctx.lineWidth = 1; ctx.fillRect(legendX, legendY, legendW, legendH); ctx.strokeRect(legendX, legendY, legendW, legendH);
@@ -1503,7 +1560,7 @@ export function renderJTWCStyle(cyclone, timeIndex, worldData) {
     ctx.font = '900 12px "Font Awesome 6 Free"'; ctx.textAlign="center"; ctx.fillText('\uf751', iconX, cY); ctx.font="bold 12px Arial"; ctx.textAlign="left"; ctx.fillText("MORE THAN 63 KT", legendX + 50, cY); cY += 25;
     ctx.beginPath(); ctx.lineWidth = 3; ctx.moveTo(iconX - 15, cY); ctx.lineTo(iconX + 15, cY); ctx.stroke(); ctx.fillText("PAST CYCLONE TRACK", legendX + 50, cY); cY += 25;
     ctx.beginPath(); ctx.lineWidth = 2; ctx.setLineDash([8, 4]); ctx.moveTo(iconX - 15, cY); ctx.lineTo(iconX + 15, cY); ctx.stroke(); ctx.setLineDash([]); ctx.fillText("FORECAST CYCLONE TRACK", legendX + 50, cY); cY += 25;
-    ctx.save(); const legPatCv = document.createElement('canvas'); legPatCv.width=10; legPatCv.height=10; const lpCtx = legPatCv.getContext('2d'); lpCtx.strokeStyle="rgba(60,220,255,0.4)"; lpCtx.lineWidth=2; lpCtx.beginPath(); lpCtx.moveTo(0,10); lpCtx.lineTo(10,0); lpCtx.stroke();
+    ctx.save(); const legPatCv = document.createElement('canvas'); legPatCv.width=10; legPatCv.height=10; const lpCtx = legPatCv.getContext('2d'); lpCtx.strokeStyle="rgba(60,220,255,0.4)"; lpCtx.lineWidth=2; lpCtx.beginPath(); lpCtx.moveTo(0,10); legPatCv.width=10; legPatCv.height=10; lpCtx.lineTo(10,0); lpCtx.stroke();
     ctx.fillStyle = ctx.createPattern(legPatCv, 'repeat'); ctx.strokeStyle="#ff0000"; ctx.lineWidth=2; ctx.setLineDash([4,2]); ctx.fillRect(iconX-15, cY-6, 30, 12); ctx.strokeRect(iconX-15, cY-6, 30, 12); ctx.restore(); ctx.fillText("UNCERTAINTY CONE AREA", legendX + 50, cY);
     ctx.restore();
 
@@ -1528,7 +1585,7 @@ export function renderProbabilitiesStyle(cyclone, timeIndex, worldData, threshol
     ctx.beginPath(); ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); pathGenerator(d3.geoGraticule().step([5, 5])()); ctx.stroke(); ctx.setLineDash([]);
 
     const snapAge = Math.floor((safeIndex * 3) / 6) * 6;
-    let forecasts = (cyclone.forecastLogs && cyclone.forecastLogs[snapAge]) ? cyclone.forecastLogs[snapAge] : (cyclone.pathForecasts || []);
+    const forecasts = (cyclone.forecastLogs && cyclone.forecastLogs[snapAge]) ? cyclone.forecastLogs[snapAge] : (cyclone.pathForecasts || []);
 
     if (!forecasts || forecasts.length === 0 || !forecasts[0].track || forecasts[0].track.length === 0) return canvas;
 
@@ -1643,7 +1700,7 @@ export function drawStationGraph(containerId, historyData, type = 'wind') {
         const barbGroup = svg.append("g").attr("class", "wind-barbs");
 
         historyData.filter((d, i) => i % step === 0).forEach(d => {
-            const angleDeg = Math.atan2(-d.v, d.u) * (180 / Math.PI);
+            const angleDeg = Math.atan2(-d.v, d.u) * RAD_TO_DEG;
             const g = barbGroup.append("g").attr("transform", `translate(${x(d.hour)}, -15) rotate(${angleDeg}) scale(0.8)`);
             g.append("line").attr("x1", 0).attr("y1", 0).attr("x2", -20).attr("y2", 0).attr("stroke", "#64748b").attr("stroke-width", 1.5);
 
@@ -1687,7 +1744,7 @@ export function renderPhaseSpace(cyclone, globalTemp = 289) {
         let B = 35.0 - (sst / 1.0), Vt = 0;
 
         if (!p[4]) {
-            let latForcing = (Math.pow(Math.max(0, Math.abs(p[1]) - 15), 1.8) / 26.0) * (1.0 + (Math.cos((month - 1) / 12 * 2 * Math.PI) * (p[1] >= 0 ? 1 : -1) * 0.3)) * (i * 3 < 48 ? Math.pow(i * 3 / 48, 1.5) : 1.0);
+            const latForcing = (Math.pow(Math.max(0, Math.abs(p[1]) - 15), 1.8) / 26.0) * (1.0 + (Math.cos((month - 1) / 12 * 2 * Math.PI) * (p[1] >= 0 ? 1 : -1) * 0.3)) * (i * 3 < 48 ? Math.pow(i * 3 / 48, 1.5) : 1.0);
             B += latForcing / (1.0 + 0.0 * Math.pow(p[2] / 40, 1.5));
             if (p[6]) B = Math.max(B, 15 + Math.random() * 5);
             Vt = ((p[2] * 1.4) - (28 - sst) * 10.0) * (p[6] ? 0.8 : 1.0) * Math.max(0.3, Math.min(1.1, (sst - 18) / 16));
@@ -1810,10 +1867,10 @@ export function startNewsAnimation(canvas, worldData, cyclone, pathForecasts, ba
             const pointsAtStep = []; forecastModels.forEach(m => { if (m.track[i]) pointsAtStep.push(m.track[i]); });
             if (pointsAtStep.length === 0) continue;
             const avgLon = d3.mean(pointsAtStep, p => p[0]), avgLat = d3.mean(pointsAtStep, p => p[1]);
-            stepData.push({ lon: avgLon, lat: avgLat, r: Math.max(0.2, (0.05 + i * 0.12) + ((d3.deviation(pointsAtStep, p => Math.hypot((p[0] - avgLon) * Math.cos(avgLat * Math.PI / 180), p[1] - avgLat)) || 0) * 1.5)) });
+            stepData.push({ lon: avgLon, lat: avgLat, r: Math.max(0.2, (0.05 + i * 0.12) + ((d3.deviation(pointsAtStep, p => Math.hypot((p[0] - avgLon) * Math.cos(avgLat * DEG_TO_RAD), p[1] - avgLat)) || 0) * 1.5)) });
         }
         stepData.forEach((curr, i) => {
-            const cosL = Math.cos(curr.lat * Math.PI / 180), prev = i > 0 ? stepData[i-1] : null, next = i < stepData.length - 1 ? stepData[i+1] : null;
+            const cosL = Math.cos(curr.lat * DEG_TO_RAD), prev = i > 0 ? stepData[i-1] : null, next = i < stepData.length - 1 ? stepData[i+1] : null;
             const normal = ((prev && next) ? Math.atan2(next.lat - prev.lat, (next.lon - prev.lon) * cosL) : (next ? Math.atan2(next.lat - curr.lat, (next.lon - curr.lon) * cosL) : Math.atan2(curr.lat - prev.lat, (curr.lon - prev.lon) * cosL))) + Math.PI / 2;
             const pCenter = projection([curr.lon, curr.lat]), pLeft = projection([curr.lon + (curr.r * Math.cos(normal) / cosL), curr.lat + (curr.r * Math.sin(normal))]), pRight = projection([curr.lon + (curr.r * Math.cos(normal + Math.PI) / cosL), curr.lat + (curr.r * Math.sin(normal + Math.PI))]);
             if (pCenter && pLeft && pRight) boundaryPoints.push({ left: pLeft, right: pRight, center: pCenter, radius: Math.hypot(pLeft[0]-pCenter[0], pLeft[1]-pCenter[1]) });
@@ -1899,24 +1956,64 @@ export function startNewsAnimation(canvas, worldData, cyclone, pathForecasts, ba
 
             ctx.lineWidth = 1.2; ctx.lineCap = "round";
 
+            const lowBatch = [];
+            const medBatch = [];
+            const highBatch = [];
+            const animMonth = cyclone.currentMonth || 8;
+
+            // update positions & batch lines together
             for (let i = 0; i < particles.length; i++) {
-                const geo = projection.invert([particles[i].x, particles[i].y]);
-                if (!geo) { initParticle(particles[i]); continue; }
-                const vec = getWindVectorAt(geo[0], geo[1], cyclone.currentMonth || 8, cyclone, pressureSystems, globalTemp, globalShear);
+                const p = particles[i];
+                const geo = projection.invert([p.x, p.y]);
+                if (!geo) { initParticle(p); continue; }
+                const vec = getWindVectorAt(geo[0], geo[1], animMonth, cyclone, pressureSystems, globalTemp, globalShear);
 
-                particles[i].x += vec.u * 0.2; particles[i].y -= vec.v * 0.2; particles[i].age++;
+                const oldX = p.x;
+                const oldY = p.y;
+                p.x += vec.u * 0.2;
+                p.y -= vec.v * 0.2;
+                p.age++;
 
-                const agePhase = particles[i].age < 15 ? particles[i].age / 15 : (particles[i].age > particles[i].maxAge - 15 ? (particles[i].maxAge - particles[i].age) / 15 : 0.5);
+                const age = p.age;
+                const maxAge = p.maxAge;
+                const agePhase = age < 15 ? age / 15 : (age > maxAge - 15 ? (maxAge - age) / 15 : 0.5);
 
-                ctx.save();
-                ctx.globalAlpha = vec.magnitude > 48 ? agePhase : (vec.magnitude > 23 ? agePhase : agePhase * 0.4);
-                ctx.strokeStyle = vec.magnitude > 48 ? "#ff5050" : (vec.magnitude > 23 ? "#ffdc64" : "#c8ffff");
+                const line = {
+                    x1: oldX,
+                    y1: oldY,
+                    x2: oldX - vec.u * 0.6,
+                    y2: oldY + vec.v * 0.6,
+                    alpha: vec.magnitude > 48 ? agePhase : (vec.magnitude > 23 ? agePhase : agePhase * 0.4)
+                };
 
-                ctx.beginPath(); ctx.moveTo(particles[i].x, particles[i].y); ctx.lineTo(particles[i].x - vec.u * 0.6, particles[i].y + vec.v * 0.6);
-                ctx.stroke(); ctx.restore();
+                if (vec.magnitude > 48) {
+                    highBatch.push(line);
+                } else if (vec.magnitude > 23) {
+                    medBatch.push(line);
+                } else {
+                    lowBatch.push(line);
+                }
 
-                if (particles[i].age >= particles[i].maxAge || particles[i].x < 0 || particles[i].x > width || particles[i].y < 0 || particles[i].y > height) initParticle(particles[i]);
+                if (age >= maxAge || p.x < 0 || p.x > width || p.y < 0 || p.y > height) initParticle(p);
             }
+
+            const drawParticleBatch = (batch, color) => {
+                if (batch.length === 0) return;
+                ctx.strokeStyle = color;
+                for (let i = 0; i < batch.length; i++) {
+                    const line = batch[i];
+                    ctx.globalAlpha = Math.max(0, Math.min(1, line.alpha));
+                    ctx.beginPath();
+                    ctx.moveTo(line.x1, line.y1);
+                    ctx.lineTo(line.x2, line.y2);
+                    ctx.stroke();
+                }
+            };
+
+            drawParticleBatch(lowBatch, "#c8ffff");
+            drawParticleBatch(medBatch, "#ffdc64");
+            drawParticleBatch(highBatch, "#ff5050");
+            ctx.globalAlpha = 1.0;
 
             const headProj = projection(fullTrackUnwrapped[fullTrackUnwrapped.length - 1]);
             if (headProj) {
