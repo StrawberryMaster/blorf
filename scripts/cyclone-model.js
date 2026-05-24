@@ -1,5 +1,5 @@
 /**
- * js/cyclone-model.js
+ * scripts/cyclone-model.js
  * Core logic and atmospheric dynamics engine
  */
 import { NAME_LISTS, getSST, getPressureAt, normalizeLongitude, calculateDistance, windToPressure } from './utils.js';

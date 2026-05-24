@@ -356,7 +356,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    d3.json("js/world-f.json").then(data => {
+    d3.json("scripts/world-f.json").then(data => {
         state.world = topojson.feature(data, data.objects.collection);
         setupCanvases();
         if (mapProjection && mapProjection.precision) {
@@ -365,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const img = new Image();
         img.crossOrigin = "Anonymous";
-        img.src = './js/elevation_1080x540.png';
+        img.src = './scripts/elevation_1080x540.png';
 
         img.onload = () => {
             initTerrainSystem(img.src, state.world).then(() => {

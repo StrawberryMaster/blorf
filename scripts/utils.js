@@ -1,5 +1,5 @@
 /**
- * js/utils.js
+ * scripts/utils.js
  * Contains shared, stateless utility functions and math helpers
  */
 

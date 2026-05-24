@@ -1,5 +1,5 @@
 /**
- * js/audio.js
+ * scripts/audio.js
  */
 
 let audioCtx = null;

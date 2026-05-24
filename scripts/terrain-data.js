@@ -1,5 +1,5 @@
 /**
- * js/terrain-data.js
+ * scripts/terrain-data.js
  * Manages terrain elevation data and land masking
  */
 

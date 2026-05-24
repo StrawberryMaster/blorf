@@ -1,5 +1,5 @@
 /**
- * js/forecast-models.js
+ * scripts/forecast-models.js
  * Generates numerical model forecast tracks and intensities
  */
 import { getSST, normalizeLongitude } from './utils.js';

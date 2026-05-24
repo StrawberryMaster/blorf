@@ -1,5 +1,5 @@
 /**
- * js/satellite-view.js
+ * scripts/satellite-view.js
  * Handles WebGL rendering for the dynamic satellite IR/Visible imagery
  */
 
